@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Left Panel: Input -->
+<aside class="panel panel-left">
+    <div style="font-weight: 600; margin-bottom: 1rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+        </svg>
+        Project: Core Banking
+    </div>
+
+    <div class="tabs">
+        <div class="tab active">SQL Input</div>
+        <div class="tab">History</div>
+    </div>
+
+    <!-- Form -->
+    <form id="verify-form"
+          hx-post="/api/verify" 
+          hx-encoding="multipart/form-data" 
+          hx-target="#result-panel"
+          hx-swap="innerHTML">
+        
+        <!-- Upload Zones -->
+        <div class="upload-zone">
+            <label>Schema / DDL</label>
+            <input type="file" name="schema_file" accept=".sql" required>
+            <div class="file-display text-muted">Click or drag Flyway DDL file here</div>
+        </div>
+
+        <div class="upload-zone">
+            <label>Original Query</label>
+            <input type="file" name="query_v1" accept=".sql" required>
+            <div class="file-display text-muted">Click or drag original .sql file</div>
+        </div>
+
+        <div class="upload-zone">
+            <label>AI-Generated Query</label>
+            <input type="file" name="query_v2" accept=".sql" required>
+            <div class="file-display text-muted">Click or drag generated .sql file</div>
+        </div>
+
+        <!-- Settings -->
+        <div class="form-group" style="margin-top: 1.5rem;">
+            <label class="form-label">SQL Dialect</label>
+            <select name="dialect" class="form-select">
+                <option value="generic">Generic SQL</option>
+                <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+                <option value="sqlite">SQLite</option>
+            </select>
+        </div>
+
+        <!-- Submit Button -->
+        <button type="submit" class="btn btn-primary" style="margin-top: 1rem;">
+            <span class="btn-text">Run Verification</span>
+            <span class="htmx-indicator">
+                <svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" stroke="currentColor">
+                    <g fill="none" fill-rule="evenodd" stroke-width="2">
+                        <circle cx="12" cy="12" r="1">
+                            <animate attributeName="r" begin="0s" calcMode="spline" dur="1.8s" keySplines="0.165, 0.84, 0.44, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 10"/>
+                            <animate attributeName="stroke-opacity" begin="0s" calcMode="spline" dur="1.8s" keySplines="0.3, 0.61, 0.355, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 0"/>
+                        </circle>
+                        <circle cx="12" cy="12" r="1">
+                            <animate attributeName="r" begin="-0.9s" calcMode="spline" dur="1.8s" keySplines="0.165, 0.84, 0.44, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 10"/>
+                            <animate attributeName="stroke-opacity" begin="-0.9s" calcMode="spline" dur="1.8s" keySplines="0.3, 0.61, 0.355, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 0"/>
+                        </circle>
+                    </g>
+                </svg>
+            </span>
+        </button>
+    </form>
+</aside>
+
+<!-- Right Panel: Results / Stubs -->
+<section class="panel panel-right">
+    <div id="result-panel" class="result-container">
+        
+        <!-- Default Empty State / Stubs -->
+        <div style="opacity: 0.5; max-width: 600px;">
+            <div style="margin-bottom: 2rem;">
+                <h3 style="margin-bottom: 1rem; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">From Schema (Auto)</h3>
+                <div style="background-color: var(--bg-color); padding: 1rem; border: 1px dashed var(--panel-border); border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem;">
+                    Upload schema to extract constraints...<br>
+                    > Primary Keys<br>
+                    > Foreign Keys<br>
+                    > Not Null
+                </div>
+            </div>
+
+            <div>
+                <h3 style="margin-bottom: 1rem; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em;">Business Logic (Manual)</h3>
+                <div class="checkbox-list">
+                    <label class="checkbox-item">
+                        <input type="checkbox" disabled>
+                        <div>
+                            <div class="checkbox-label">No Phantom Reads</div>
+                            <div class="checkbox-desc">Check if query output changes under concurrent inserts.</div>
+                        </div>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" disabled>
+                        <div>
+                            <div class="checkbox-label">Null Propagations</div>
+                            <div class="checkbox-desc">Verify left joins safely handle missing references.</div>
+                        </div>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+{% endblock %}
