@@ -1,0 +1,66 @@
+<div class="fadeIn">
+  {% if not runs %}
+  <div
+    style="
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      text-align: center;
+      padding: 2rem 0;
+    "
+  >
+    No verification runs yet.
+  </div>
+  {% else %}
+  <div style="display: flex; flex-direction: column; gap: 0.75rem">
+    {% for run in runs %}
+    <div
+      style="
+        padding: 0.875rem 1rem;
+        background: var(--bg-color);
+        border: 1px solid var(--panel-border);
+        border-radius: 6px;
+        cursor: pointer;
+      "
+      hx-get="/api/history/{{ run.id }}"
+      hx-target="#result-panel"
+      hx-swap="innerHTML"
+    >
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 0.35rem;
+        "
+      >
+        <span class="status-badge status-{{ run.status }}"
+          >{{ run.status }}</span
+        >
+        <span style="font-size: 0.75rem; color: var(--text-secondary)"
+          >{{ run.duration_ms }}ms</span
+        >
+      </div>
+
+      <div style="font-size: 0.75rem; color: var(--text-secondary)">
+        {{ run.dialect }} · {{ run.created_at[:19] | replace("T", " ") }}
+      </div>
+
+      {% if run.divergence_reason %}
+      <div
+        style="
+          font-size: 0.8rem;
+          color: var(--text-primary);
+          margin-top: 0.35rem;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        "
+      >
+        {{ run.divergence_reason }}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>

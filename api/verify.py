@@ -22,6 +22,7 @@ Returns JSON:
   }
 """
 
+import time
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -33,8 +34,7 @@ from core.models import VerificationResult
 
 from explainer.explain import explain_result
 
-import time
-from db.repositories.verification_runs import save_run
+from db.repositories.verification_runs import save_run, get_recent_runs
 
 
 templates = Jinja2Templates(directory="web/templates")
@@ -208,3 +208,42 @@ async def health():
         return {"status": "ok", "z3": "loaded"}
     except ImportError as e:
         raise HTTPException(status_code=500, detail=f"Z3 not available: {e}")
+    
+
+@router.get("/history")
+async def history(request: Request):
+    runs = await get_recent_runs(limit=20)
+    if "hx-request" in request.headers:
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/history.html",
+            context={"runs": runs}
+        )
+    return runs
+
+@router.get("/history/{run_id}")
+async def history_detail(run_id: str, request: Request):
+    from db.repositories.verification_runs import get_run_by_id
+    row = await get_run_by_id(run_id)
+    if not row:
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/result.html",
+            context={"result": None}
+        )
+
+    # Reconstruct a VerificationResult from the stored row
+    result = VerificationResult(
+        status=row["status"],
+        divergence_reason=row["divergence_reason"],
+        counterexample_db=row["counterexample_db"],
+        query_v1_output=row["query_v1_output"],
+        query_v2_output=row["query_v2_output"],
+        error_message=row["error_message"],
+        explanation=row["explanation"],
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/result.html",
+        context={"result": result}
+    )
