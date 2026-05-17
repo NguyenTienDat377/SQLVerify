@@ -16,7 +16,7 @@ Query B:
 Explain in plain English:
 1. What the counterexample rows represent.
 2. Why the two queries produce different results on this input.
-3. Which query is more likely to reflect the intended behavior, and why.
+3. A concrete suggestion for fixing the Query B to match Query A.
 Keep the explanation concise (3-5 sentences).
 """
 
