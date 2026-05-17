@@ -24,7 +24,7 @@ Returns JSON:
 
 import time
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
@@ -34,7 +34,7 @@ from core.models import VerificationResult
 
 from explainer.explain import explain_result
 
-from db.repositories.verification_runs import save_run, get_recent_runs
+from db.repositories.verification_runs import save_run, get_recent_runs, update_explanation
 
 
 templates = Jinja2Templates(directory="web/templates")
@@ -104,6 +104,7 @@ async def verify_equivalence(
     dialect:    str = Form(default="generic", description="SQL dialect"),
     bound:      int = Form(default=3, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
     timeout_ms: int = Form(default=15_000, ge=1_000, le=60_000),
+    explain:    Optional[str] = Form(default=None, description="Set to 'true' to request AI explanation"),
 ):
     """
     Check whether query_v2 is semantically equivalent to query_v1
@@ -134,20 +135,61 @@ async def verify_equivalence(
 
     duration_ms = int((time.monotonic() - start) * 1000)
 
-    # Generate LLM explanation for divergent results
-    if result.status == "divergent":
+    # Only call LLM when the user explicitly requested an explanation
+    if result.status == "divergent" and explain == "true":
         result.explanation = await explain_result(result, v1_sql, v2_sql)
 
-    await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms)
+    run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms)
 
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
             request=request,
             name="partials/result.html",
-            context={"result": result}
+            context={"result": result, "run_id": run_id}
         )
 
     return _result_to_response(result)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/explain/{run_id} — on-demand LLM explanation for a saved run
+# ---------------------------------------------------------------------------
+
+@router.post("/explain/{run_id}")
+async def generate_explanation(run_id: str, request: Request):
+    """
+    Generate and persist an AI explanation for a previously saved divergent run.
+    Returns an HTML fragment (explanation box) for htmx swap.
+    """
+    from db.repositories.verification_runs import get_run_by_id
+
+    row = await get_run_by_id(run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if row["status"] != "divergent":
+        raise HTTPException(status_code=400, detail="Explanation only available for divergent results.")
+
+    # Return cached explanation if already generated — no duplicate LLM call
+    if row.get("explanation"):
+        safe = row["explanation"].replace("**", "")
+        html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe}</div>'
+        return HTMLResponse(content=html)
+
+    result = VerificationResult(
+        status=row["status"],
+        divergence_reason=row["divergence_reason"],
+        counterexample_db=row["counterexample_db"],
+        query_v1_output=row["query_v1_output"],
+        query_v2_output=row["query_v2_output"],
+        error_message=row["error_message"],
+    )
+
+    explanation = await explain_result(result, row["sql_v1"], row["sql_v2"])
+    await update_explanation(run_id, explanation)
+
+    safe_explanation = explanation.replace("**", "")
+    html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe_explanation}</div>'
+    return HTMLResponse(content=html)
 
 
 # ---------------------------------------------------------------------------
@@ -245,5 +287,5 @@ async def history_detail(run_id: str, request: Request):
     return templates.TemplateResponse(
         request=request,
         name="partials/result.html",
-        context={"result": result}
+        context={"result": result, "run_id": run_id}
     )

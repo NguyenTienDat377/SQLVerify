@@ -113,3 +113,14 @@ async def get_run_by_id(run_id: str) -> Optional[dict]:
     except Exception as e:
         print(f"[db] Failed to fetch run {run_id}: {e}")
         return None
+
+
+async def update_explanation(run_id: str, explanation: str) -> bool:
+    """Persist a generated explanation for an existing run."""
+    try:
+        client = get_client()
+        client.table("verification_runs").update({"explanation": explanation}).eq("id", run_id).execute()
+        return True
+    except Exception as e:
+        print(f"[db] Failed to update explanation for {run_id}: {e}")
+        return False

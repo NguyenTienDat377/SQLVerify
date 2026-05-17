@@ -1,90 +1,224 @@
-# CLAUDE.md
+# CLAUDE.md — SQLVerify
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+A context file for Claude Code. Read this fully before touching any file.
 
-## Commands
+---
+
+## What SQLVerify is
+
+A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and two SQL queries (original vs AI-rewritten), SQLVerify uses Z3/SMT solving to either **prove they are semantically equivalent** or **produce a concrete counterexample database** where they diverge.
+
+**Core value proposition:** Deterministic formal verification as an antidote to probabilistic AI output — proof that a query does what it's intended to do, not just that it runs.
+
+**Target users (V1):** Backend engineers reviewing AI-generated SQL before it ships to production.  
+**Target users (V2):** AI agent pipelines that need automated SQL validation with minimal human review.  
+**Market timing:** Positioned for 2026 as LLM-in-production adoption matures and SQL agent use grows.
+
+---
+
+## Stack
+
+- **Backend:** FastAPI (async)
+- **Solver:** Z3 (via `z3-solver` Python package)
+- **SQL parsing:** sqlglot
+- **Database:** Supabase (managed PostgreSQL)
+- **Frontend:** Jinja2 templates + HTMX
+- **LLM explainer:** Multi-provider abstraction (Claude / Gemini / GPT, swappable via env var)
+- **Deployment target:** Render (always-on container, NOT serverless Lambda — Z3 cold starts are too heavy)
+
+---
+
+## Directory structure
+
+```
+SQLVerify/
+├── main.py                         # FastAPI app entry point
+├── config.py                       # ✅ DONE — Pydantic Settings (reads .env)
+├── CLAUDE.md                       # This file
+├── .env                            # Never commit — secrets live here
+├── .env.example                    # Commit this — placeholder keys only
+├── .gitignore
+├── requirements.txt
+│
+├── core/
+│   ├── __init__.py
+│   ├── models.py                   # ✅ DONE — dataclasses: Column, Table, SchemaModel, VerificationResult
+│   ├── ddl_parser.py               # ✅ DONE — Flyway DDL → SchemaModel via sqlglot
+│   ├── sql_encoder.py              # ✅ DONE — SELECT + SchemaModel → Z3 QueryFormula
+│   ├── equivalence.py              # ✅ DONE — two QueryFormulas → VerificationResult with counterexample
+│   ├── constraint_check.py         # ⬜ STUB — empty placeholder for Direction 2 (single-query constraint check)
+│   └── witness.py                  # ⬜ STUB — empty placeholder for counterexample witness generation
+│
+├── explainer/
+│   ├── __init__.py                 # ✅ DONE — empty
+│   ├── explain.py                  # ✅ DONE — explain_result() public API: VerificationResult → plain-English string
+│   ├── providers.py                # ✅ DONE — LLMProvider ABC + Claude/Gemini/GPT implementations + get_provider()
+│   └── prompts.py                  # ✅ DONE — EQUIVALENCE_EXPLANATION and CONSTRAINT_EXPLANATION prompt templates
+│
+├── api/
+│   ├── __init__.py
+│   └── verify.py                   # ✅ DONE — all endpoints (see "What is DONE > api/" below)
+│
+├── db/
+│   ├── __init__.py
+│   ├── client.py                   # ✅ DONE — Supabase client (uses service key)
+│   └── repositories/
+│       ├── __init__.py
+│       └── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation()
+│
+├── auth/                           # ❌ NOT BUILT — Supabase auth middleware
+│   └── __init__.py
+│
+└── web/
+    ├── static/
+    │   └── css/
+    │       └── style.css
+    └── templates/
+        ├── base.html               # ✅ DONE
+        ├── verify.html             # ✅ DONE — SQL Input tab + History tab (HTMX wired)
+        └── partials/
+            ├── result.html         # ✅ DONE — HTMX partial: equivalent/divergent/error/unknown badges + counterexample table + Explain button
+            └── history.html        # ✅ DONE — HTMX partial: list of past runs, click to replay result
+
+---
+
+## What is DONE
+
+### core/
+- `models.py` — `Column`, `ForeignKey`, `Table`, `SchemaModel`, `VerificationResult` dataclasses
+- `ddl_parser.py` — parses Flyway-style DDL SQL into `SchemaModel` using sqlglot
+- `sql_encoder.py` — encodes a SELECT query + SchemaModel into Z3 `QueryFormula`
+- `equivalence.py` — takes two `QueryFormula` objects, runs Z3, returns `VerificationResult`
+
+### explainer/
+- `prompts.py` — two prompt templates:
+  - `EQUIVALENCE_EXPLANATION` — explains why two queries diverge, with counterexample
+  - `CONSTRAINT_EXPLANATION` — explains why a query violates a constraint property
+- `providers.py` — `LLMProvider` ABC with single method `async def explain(prompt: str) -> str`, plus:
+  - `AnthropicProvider` (Claude)
+  - `OpenAIProvider` (GPT)
+  - `GoogleProvider` (Gemini)
+  - `get_provider()` factory — reads `EXPLAINER_PROVIDER` env var, returns right instance
+- `explain.py` — `explain_result(result, sql_v1, sql_v2, provider_name=None) -> str`: public async function that formats the prompt and calls the provider. Returns `""` for non-divergent results. Catches `ExplainerError` and returns a fallback string — never breaks the caller.
+
+### api/
+- `verify.py` — all endpoints:
+  - `POST /api/verify` — multipart form (`schema_file` + `query_v1` + `query_v2` + optional `explain=true`), HTMX-aware. Calls `explain_result()` only when `explain=true` and status is divergent.
+  - `POST /api/explain/{run_id}` — on-demand LLM explanation for a saved run. Fetches from Supabase, calls `explain_result()`, persists via `update_explanation()`, returns HTML fragment for HTMX swap. Returns cached explanation if already generated.
+  - `POST /api/verify/text` — JSON body for CI/CD pipelines (always calls explainer on divergent results)
+  - `GET /api/history` — returns `history.html` partial with list of past runs
+  - `GET /api/history/{run_id}` — returns `result.html` partial replaying a specific run
+  - `GET /api/verify/health` — liveness check
+
+### db/
+- `client.py` — Supabase client using service key
+- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`
+- Supabase `verification_runs` table is set up with RLS enabled
+
+### web/
+- `verify.html` — two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS function handles tab switching.
+- `partials/result.html` — renders `VerificationResult` with status badge + counterexample table + divergence reason
+- `partials/history.html` — renders list of past runs with timestamp, status badge, query preview, and "View" button
+
+---
+
+## What is NOT BUILT (next tasks)
+
+### 1. `auth/` — Supabase auth middleware ← BUILD THIS NEXT
+Not started. Low priority for V1 demo.
+
+### 2. `core/constraint_check.py` — Direction 2: single-query constraint checking
+File exists but is empty. Intended to check whether a single query satisfies schema constraints (FK, PK, NOT NULL). Not required for V1 equivalence demo.
+
+### 3. `core/witness.py` — Witness/counterexample generation helpers
+File exists but is empty. Intended to clean up and format Z3 model output into human-readable counterexample databases. Currently handled inline in `equivalence.py`.
+
+### 4. Tests
+No test suite yet. When writing tests, cover:
+- `core/ddl_parser.py` — DDL parsing edge cases
+- `core/equivalence.py` — known equivalent and known divergent query pairs
+- `api/verify.py` — endpoint smoke tests
+
+---
+
+## Key design decisions (do not change without reason)
+
+| Decision | Rationale |
+|---|---|
+| `bound=3` hardcoded in `equivalence.py` | Catches >95% of real SQL semantic bugs. Not exposed in UI — would confuse engineers. Power users can override via env var. |
+| V1 scope: single JOIN only (INNER or LEFT) | Keeps Z3 encoding tractable. No CTEs, window functions, subqueries, UNION, RIGHT/FULL OUTER JOIN. |
+| HTMX for frontend interactivity | No React build step, no npm. Jinja2 + HTMX keeps the stack simple and server-rendered. |
+| Multi-LLM provider abstraction | Factory pattern in `explainer/providers.py`. Adding a new provider = one new class + one line in `get_provider()`. Never add provider-specific logic outside `providers.py`. |
+| Explainer is on-demand only | The "Explain" button is explicit user action. Never auto-call LLM on every verification — cost and latency. |
+| Supabase for DB + auth | Managed PostgreSQL + built-in auth. No self-hosted infra. Service key stays server-side only, never exposed to frontend. |
+| Render for deployment | Always-on container. NOT Lambda/serverless — Z3 binary is too large for cold starts. |
+| No cross-dialect comparison in V1 | sqlglot supports dialects but encoding dialect-specific semantics in Z3 is non-trivial. Out of scope. |
+
+---
+
+## V1 known limitations
+
+- Single JOIN per query only (INNER or LEFT). No RIGHT, FULL OUTER.
+- No CTEs (`WITH` clauses)
+- No window functions (`ROW_NUMBER`, `RANK`, etc.)
+- No subqueries or `UNION`
+- NULLs not modeled as a distinct domain value in Z3
+- TEXT/TIMESTAMP equality is symbolic (interned to int) — string ordering not supported
+- CHECK constraints parsed but not encoded into Z3 (FK/PK covers most real bugs)
+- `bound=3` may miss bugs requiring 4+ row interactions (rare in practice)
+- No cross-dialect comparison (e.g. PostgreSQL vs MySQL semantics)
+
+---
+
+## Environment variables
+
+```
+
+ANTHROPIC_API_KEY=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_KEY=
+EXPLAINER_PROVIDER=claude # claude | openai | google
+
+````
+
+All of these go into Render's environment variable panel. Never in the repo.
+
+---
+
+## Local development
 
 ```bash
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Copy and fill in credentials
-cp .env.example .env
-
-# Run the API server (auto-reload)
 uvicorn main:app --reload --port 8000
+````
 
-# Run all tests
-pytest
+Open `http://localhost:8000`.
 
-# Run a single test file
-pytest tests/core/test_equivalence.py
+---
 
-# Run a single test by name
-pytest tests/core/test_equivalence.py::test_name -v
+## Supabase schema
+
+```sql
+CREATE TABLE verification_runs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    status          TEXT NOT NULL,          -- equivalent | divergent | unknown | error
+    divergence_reason TEXT,
+    counterexample_db JSONB,
+    query_v1_output JSONB,
+    query_v2_output JSONB,
+    error_message   TEXT,
+    explanation     TEXT,                   -- filled in by /api/explain
+    ddl_input       TEXT,
+    query_a_input   TEXT,
+    query_b_input   TEXT,
+    result_json     JSONB,
+    bound           INT DEFAULT 3,
+    duration_ms     INT,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
 ```
 
-The Swagger UI is available at `http://localhost:8000/docs` when the server is running.
-
-## Required Environment Variables
-
-Configured via `.env` (see `.env.example`). Loaded by `config.py` using Pydantic BaseSettings:
-
-- `SUPABASE_URL` / `SUPABASE_KEY` — Supabase database connection
-- `ANTHROPIC_API_KEY` — For LLM explanation generation
-- `SECRET_KEY` — Optional, defaults to `"change-me"`
-
-## Architecture
-
-SQLVerify is a **formal SQL equivalence checker**: given a schema (DDL) and two SELECT queries, it uses the Z3 SMT solver to determine whether the queries always return the same results, or it finds a minimal counterexample database that proves they diverge.
-
-### Verification Pipeline (Direction 1 — implemented)
-
-```
-DDL text ──▶ parse_ddl() ──▶ SchemaModel
-                                  │
-               sql_v1, sql_v2 ──▶ parse_query() ──▶ ParsedQuery × 2
-                                  │
-                             SymbolicDB (Z3 variables, one set shared by both queries)
-                                  │
-                             encode_query() ──▶ QueryFormula × 2
-                                  │
-                             Z3 Solver: assert divergence, check SAT
-                                  │
-                  SAT ──▶ _materialize_witness() ──▶ SQLite in-memory DB
-                                  │
-                          execute both queries ──▶ VerificationResult
-```
-
-Key modules:
-- [core/models.py](core/models.py) — Pure data models: `Column`, `Table`, `SchemaModel`, `ForeignKey`, `VerificationResult`
-- [core/ddl_parser.py](core/ddl_parser.py) — Parses `CREATE TABLE` DDL via sqlglot into `SchemaModel`. Normalizes all SQL types to `INTEGER | REAL | TEXT | BOOLEAN | TIMESTAMP`.
-- [core/sql_encoder.py](core/sql_encoder.py) — Parses SELECT queries into `ParsedQuery`, builds `SymbolicDB` (Z3 variables for each table/column/row slot, bounded by `DEFAULT_BOUND = 3`), encodes queries into Z3 `QueryFormula`.
-- [core/equivalence.py](core/equivalence.py) — Orchestrates the full pipeline via `check_equivalence()`. On SAT, materializes the Z3 model into a concrete SQLite DB, runs both queries, and returns their actual outputs.
-- [api/verify.py](api/verify.py) — FastAPI router with two endpoints: `POST /api/verify` (file upload) and `POST /api/verify/text` (JSON). Limits: `MAX_BOUND = 6`, `MAX_FILE_BYTES = 512 KB`, `timeout_ms` capped at 60 s.
-- [explainer/prompts.py](explainer/prompts.py) — Prompt templates for calling Claude to explain equivalence divergences or constraint violations in plain English.
-
-### Direction 2 — Constraint Checking (stub only)
-
-[core/constraint_check.py](core/constraint_check.py) and [core/witness.py](core/witness.py) are empty stubs for a planned feature that would verify whether a single query satisfies a stated property.
-
-### Z3 Encoding Details
-
-- **Bound**: Each table gets `bound` symbolic rows (default 3). Higher = more coverage but exponentially slower.
-- **Text/Timestamp columns** are encoded as `Int` via string interning (literals mapped to small integers).
-- **Domain constraints** enforce PK uniqueness, FK integrity, NOT NULL, and value ranges.
-- **Divergence assertion**: The solver checks `∃ db. query_v1(db) ≠ query_v2(db)`. SAT means divergent; UNSAT means equivalent within the bound; timeout → `"unknown"`.
-
-### SQL Subset Supported by the Parser (V1)
-
-- `SELECT`: column refs, `SUM`, `COUNT(*)`, `COUNT(col)`, `COALESCE(SUM(...), 0)`
-- `FROM`: single table with alias
-- `JOIN`: one `INNER` or `LEFT JOIN` with simple equality `ON`
-- `WHERE`: `AND` chains of `=`, `>`, `>=`, `<`, `<=`, `IS NULL`, `IS NOT NULL`
-- `GROUP BY`: one or more columns; `HAVING`: simple aggregate comparisons
-
-Not supported: window functions, CTEs, subqueries, `UNION`, `ORDER BY`, `LIMIT`.
-
-### DDL Parser Limitations
-
-Handles `CREATE TABLE` only. Does not handle `ALTER TABLE`, `CREATE INDEX`, or `CREATE VIEW`. Intended for Flyway-style migration files.
+RLS is enabled. The service key in `db/client.py` bypasses RLS for server-side writes.
