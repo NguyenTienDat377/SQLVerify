@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: sqlverify
+    runtime: docker
+    region: singapore
+    plan: starter
+    healthCheckPath: /api/verify/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: EXPLAINER_PROVIDER
+        value: claude
