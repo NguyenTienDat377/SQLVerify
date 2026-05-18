@@ -55,27 +55,60 @@
       hx-swap="innerHTML"
     >
       <!-- Upload Zones -->
-      <div class="upload-zone">
-        <label>Schema / DDL</label>
-        <input type="file" name="schema_file" accept=".sql" required />
-        <div class="file-display text-muted">
-          Click or drag Flyway DDL file here
+      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <label style="margin: 0; font-weight: 600;">Schema / DDL</label>
+          <div style="font-size: 0.8rem; display: flex; gap: 0.5rem; color: var(--text-secondary);">
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="schema_input_type" value="file" checked onclick="toggleInput('schema', 'file')"> File</label>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="schema_input_type" value="text" onclick="toggleInput('schema', 'text')"> Text</label>
+          </div>
+        </div>
+        <div class="upload-zone" id="schema_file_container">
+          <input type="file" name="schema_file" accept=".sql" />
+          <div class="file-display text-muted">
+            Click or drag Flyway DDL file here
+          </div>
+        </div>
+        <div id="schema_text_container" style="display: none;">
+          <textarea name="schema_text" style="width: 100%; height: 100px; padding: 0.75rem; border: 1px solid var(--panel-border); border-radius: 6px; background: var(--bg-color); color: var(--text-primary); font-family: var(--font-mono); font-size: 0.875rem; resize: vertical;" placeholder="Paste schema SQL here..."></textarea>
         </div>
       </div>
 
-      <div class="upload-zone">
-        <label>Original Query</label>
-        <input type="file" name="query_v1" accept=".sql" required />
-        <div class="file-display text-muted">
-          Click or drag original .sql file
+      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <label style="margin: 0; font-weight: 600;">Original Query</label>
+          <div style="font-size: 0.8rem; display: flex; gap: 0.5rem; color: var(--text-secondary);">
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="query_v1_input_type" value="file" checked onclick="toggleInput('query_v1', 'file')"> File</label>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="query_v1_input_type" value="text" onclick="toggleInput('query_v1', 'text')"> Text</label>
+          </div>
+        </div>
+        <div class="upload-zone" id="query_v1_file_container">
+          <input type="file" name="query_v1_file" accept=".sql" />
+          <div class="file-display text-muted">
+            Click or drag original .sql file
+          </div>
+        </div>
+        <div id="query_v1_text_container" style="display: none;">
+          <textarea name="query_v1_text" style="width: 100%; height: 100px; padding: 0.75rem; border: 1px solid var(--panel-border); border-radius: 6px; background: var(--bg-color); color: var(--text-primary); font-family: var(--font-mono); font-size: 0.875rem; resize: vertical;" placeholder="Paste original query here..."></textarea>
         </div>
       </div>
 
-      <div class="upload-zone">
-        <label>AI-Generated Query</label>
-        <input type="file" name="query_v2" accept=".sql" required />
-        <div class="file-display text-muted">
-          Click or drag generated .sql file
+      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <label style="margin: 0; font-weight: 600;">AI-Generated Query</label>
+          <div style="font-size: 0.8rem; display: flex; gap: 0.5rem; color: var(--text-secondary);">
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="query_v2_input_type" value="file" checked onclick="toggleInput('query_v2', 'file')"> File</label>
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 0.25rem;"><input type="radio" name="query_v2_input_type" value="text" onclick="toggleInput('query_v2', 'text')"> Text</label>
+          </div>
+        </div>
+        <div class="upload-zone" id="query_v2_file_container">
+          <input type="file" name="query_v2_file" accept=".sql" />
+          <div class="file-display text-muted">
+            Click or drag generated .sql file
+          </div>
+        </div>
+        <div id="query_v2_text_container" style="display: none;">
+          <textarea name="query_v2_text" style="width: 100%; height: 100px; padding: 0.75rem; border: 1px solid var(--panel-border); border-radius: 6px; background: var(--bg-color); color: var(--text-primary); font-family: var(--font-mono); font-size: 0.875rem; resize: vertical;" placeholder="Paste generated query here..."></textarea>
         </div>
       </div>
 
@@ -258,6 +291,20 @@
       tab === "sql" ? "block" : "none";
     document.getElementById("history-panel").style.display =
       tab === "history" ? "block" : "none";
+  }
+
+  function toggleInput(field, type) {
+    if (type === 'file') {
+      document.getElementById(field + '_file_container').style.display = 'block';
+      document.getElementById(field + '_text_container').style.display = 'none';
+      // Clear textarea so backend prefers file
+      document.querySelector(`[name="${field}_text"]`).value = '';
+    } else {
+      document.getElementById(field + '_file_container').style.display = 'none';
+      document.getElementById(field + '_text_container').style.display = 'block';
+      // Clear file input so backend prefers text
+      document.querySelector(`[name="${field}_file"]`).value = '';
+    }
   }
 </script>
 {% endblock %}

@@ -359,6 +359,23 @@ def _parse_conditions(node: exp.Expression) -> list[ParsedCondition]:
                     col=col_node.name,
                     value=None,
                 ))
+        else:
+            negation_map = {
+                "gt": "lte", "gte": "lt",
+                "lt": "gte", "lte": "gt",
+                "eq": "neq", "neq": "eq",
+            }
+            for cond in _parse_conditions(inner):
+                if cond.op in negation_map:
+                    results.append(ParsedCondition(
+                        op=negation_map[cond.op],
+                        table_alias=cond.table_alias,
+                        col=cond.col,
+                        value=cond.value,
+                        agg_type=cond.agg_type,
+                        agg_col=cond.agg_col,
+                        agg_table_alias=cond.agg_table_alias,
+                    ))
 
     return results
 
@@ -833,39 +850,6 @@ def _condition_to_z3(
 
     return None
 
-    def z3_val(v):
-        if isinstance(v, str):
-            int_val = db.intern_string(tname, cond.col, v)
-            return IntVal(int_val)
-        # Coerce based on declared column type, NOT Python type of the literal.
-        # Sqlglot parses "0" as int(0) even when the column is REAL,
-        # so we must look at the schema to decide RealVal vs IntVal.
-        if col_type == "REAL":
-            return RealVal(float(v))
-        return IntVal(int(v))
-
-    if cond.op == "eq":
-        return z3_var == z3_val(cond.value)
-    if cond.op == "neq":
-        return z3_var != z3_val(cond.value)
-    if cond.op == "gt":
-        return z3_var > z3_val(cond.value)
-    if cond.op == "gte":
-        return z3_var >= z3_val(cond.value)
-    if cond.op == "lt":
-        return z3_var < z3_val(cond.value)
-    if cond.op == "lte":
-        return z3_var <= z3_val(cond.value)
-    if cond.op == "is_null":
-        col_obj = schema.get_table(tname) and schema.get_table(tname).get_column(cond.col)
-        if col_obj and not col_obj.nullable:
-            return BoolVal(False)
-        return BoolVal(False)   # V1: NULLs not modeled as separate domain value
-    if cond.op == "is_not_null":
-        return BoolVal(True)    # V1: all values are non-null in symbolic domain
-
-    return None
-      
 
 
 def _having_to_z3(

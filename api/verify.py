@@ -63,21 +63,27 @@ MAX_FILE_BYTES = 512 * 1024  # 512 KB per file — SQL files are never bigger
 MAX_BOUND = 6
 
 
-async def _read_file(upload: UploadFile, field_name: str) -> str:
-    """Read an uploaded file into a string with size guard."""
-    content = await upload.read()
-    if len(content) > MAX_FILE_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"'{field_name}' exceeds maximum size of {MAX_FILE_BYTES // 1024}KB.",
-        )
-    try:
-        return content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{field_name}' must be a UTF-8 encoded SQL file.",
-        )
+async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_name: str) -> str:
+    """Read an uploaded file or text string, prioritizing text if present."""
+    if text and text.strip():
+        return text.strip()
+    
+    if upload and upload.filename:
+        content = await upload.read()
+        if len(content) > MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"'{field_name}' exceeds maximum size of {MAX_FILE_BYTES // 1024}KB.",
+            )
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{field_name}' must be a UTF-8 encoded SQL file.",
+            )
+    
+    raise HTTPException(status_code=400, detail=f"No valid input provided for '{field_name}'.")
 
 
 def _result_to_response(result: VerificationResult) -> VerifyResponse:
@@ -98,9 +104,12 @@ def _result_to_response(result: VerificationResult) -> VerifyResponse:
 @router.post("/verify")
 async def verify_equivalence(
     request: Request,
-    schema_file: UploadFile = File(..., description="Flyway DDL file (.sql)"),
-    query_v1:   UploadFile = File(..., description="Original trusted query (.sql)"),
-    query_v2:   UploadFile = File(..., description="AI-generated query (.sql)"),
+    schema_file: Optional[UploadFile] = File(None, description="Flyway DDL file (.sql)"),
+    schema_text: Optional[str] = Form(None, description="Schema text"),
+    query_v1_file: Optional[UploadFile] = File(None, description="Original trusted query (.sql)"),
+    query_v1_text: Optional[str] = Form(None, description="Original query text"),
+    query_v2_file: Optional[UploadFile] = File(None, description="AI-generated query (.sql)"),
+    query_v2_text: Optional[str] = Form(None, description="Generated query text"),
     dialect:    str = Form(default="generic", description="SQL dialect"),
     bound:      int = Form(default=3, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
     timeout_ms: int = Form(default=15_000, ge=1_000, le=60_000),
@@ -112,15 +121,10 @@ async def verify_equivalence(
 
     Returns a counterexample database if the queries diverge.
     """
-    # Read all three files
-    ddl_sql  = await _read_file(schema_file, "schema_file")
-    v1_sql   = await _read_file(query_v1, "query_v1")
-    v2_sql   = await _read_file(query_v2, "query_v2")
-
-    # Validate inputs are non-empty
-    for name, content in [("schema_file", ddl_sql), ("query_v1", v1_sql), ("query_v2", v2_sql)]:
-        if not content.strip():
-            raise HTTPException(status_code=400, detail=f"'{name}' is empty.")
+    # Read inputs, falling back to file if text is empty
+    ddl_sql  = await _get_content(schema_file, schema_text, "schema_file")
+    v1_sql   = await _get_content(query_v1_file, query_v1_text, "query_v1")
+    v2_sql   = await _get_content(query_v2_file, query_v2_text, "query_v2")
 
     start = time.monotonic()
     # Run verification (all errors caught inside check_equivalence)

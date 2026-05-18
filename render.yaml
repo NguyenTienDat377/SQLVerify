@@ -3,7 +3,7 @@ services:
     name: sqlverify
     runtime: docker
     region: singapore
-    plan: starter
+    plan: free
     healthCheckPath: /api/verify/health
     envVars:
       - key: ANTHROPIC_API_KEY
