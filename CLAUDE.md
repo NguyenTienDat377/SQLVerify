@@ -162,10 +162,14 @@ No test suite yet. When writing tests, cover:
 - No CTEs (`WITH` clauses)
 - No window functions (`ROW_NUMBER`, `RANK`, etc.)
 - No subqueries or `UNION`
-- NULLs not modeled as a distinct domain value in Z3
+- NULLs ARE modeled (each cell is a `(is_null, value)` pair, three-valued logic per the VeriEQL paper): `IS NULL` / `IS NOT NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT JOIN null-extension are all encoded. NOT NULL / PK columns forced non-NULL; FK columns may be NULL.
+- WHERE/HAVING predicates compare a column to a *literal* only — column-to-column predicates (e.g. `WHERE b = a`) are silently dropped
 - TEXT/TIMESTAMP equality is symbolic (interned to int) — string ordering not supported
-- CHECK constraints parsed but not encoded into Z3 (FK/PK covers most real bugs)
-- `bound=3` may miss bugs requiring 4+ row interactions (rare in practice)
+- CHECK constraints parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs)
+- Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list/ORDER BY semantics
+- GROUP BY merges rows with equal keys (Dedup); group keys are assumed to come from the FROM table
+- Integer value domain is a finite window `[-bound*4, bound*4]` (includes 0/negatives) — an "equivalent" verdict is sound only within this window
+- `bound` (default 5) may miss bugs requiring more row interactions (rare in practice)
 - No cross-dialect comparison (e.g. PostgreSQL vs MySQL semantics)
 
 ---

@@ -30,9 +30,10 @@ Usage:
 import sqlite3
 from typing import Optional
 
+import z3
 from z3 import (
-    And, Bool, BoolVal, If, Implies, Int, IntVal, Not, Or,
-    Real, RealVal, Solver, is_true, sat, unknown, unsat,
+    And, Bool, BoolVal, If, Implies, Int, IntSort, IntVal, Not, Or,
+    Real, RealVal, Solver, Sum, ToReal, is_true, sat, unknown, unsat,
 )
 
 from core.ddl_parser import parse_ddl
@@ -168,54 +169,91 @@ def _run(
 # Divergence assertion
 # ---------------------------------------------------------------------------
 
+def _val_eq(x, y):
+    """Sort-safe equality of two Z3 arithmetic values (coerce Int↔Real)."""
+    try:
+        return x == y
+    except Exception:
+        xr = ToReal(x) if x.sort() == IntSort() else x
+        yr = ToReal(y) if y.sort() == IntSort() else y
+        return xr == yr
+
+
+def _col_eq(a, b):
+    """NULL-aware column equality for bag-multiplicity comparison.
+    Following the paper (§4.5): two NULLs are considered equal, and two
+    non-NULL values are equal iff their underlying values match."""
+    return Or(
+        And(a.is_null, b.is_null),
+        And(Not(a.is_null), Not(b.is_null), _val_eq(a.value, b.value)),
+    )
+
+
+def _tuple_eq(t, r) -> object:
+    """Two output tuples are equal iff all corresponding columns are equal."""
+    if len(t.cols) != len(r.cols):
+        return BoolVal(False)
+    return And([_col_eq(t.cols[k], r.cols[k]) for k in range(len(t.cols))])
+
+
 def _assert_diverges(
     f1: QueryFormula,
     f2: QueryFormula,
     bound: int,
 ) -> object:
     """
-    Build the Z3 assertion that the two query formulas produce different output
-    on the same symbolic database.
+    Build the Z3 assertion that the two queries produce different output bags on
+    the same symbolic database — the negation of the paper's bag-equivalence
+    formula (Eqns 1–2):
 
-    Two queries diverge if for any group i:
-      - One includes it in output and the other doesn't (row presence differs), OR
-      - Both include it but with different aggregate values (value differs)
+      (1) the two outputs have the same number of present (non-deleted) tuples, and
+      (2) every present tuple in R1 has the same multiplicity in R1 and in R2.
+
+    Two queries with different output arity are trivially non-equivalent.
     """
-    presence_differs = [
-        f1.in_output[i] != f2.in_output[i]
-        for i in range(bound)
-    ]
+    if f1.arity != f2.arity:
+        return BoolVal(True)
 
-    value_differs = []
-    # Find aggregate aliases that appear in both formulas
-    common_agg_aliases = set(f1.agg_values.keys()) & set(f2.agg_values.keys())
-    # Exclude bare column aliases (not aggregates) — these can't differ independently
-    agg_only = {
-        alias for alias in common_agg_aliases
-        if alias not in (f1.group_key_vars or {})
-    }
+    r1, r2 = f1.output, f2.output
 
-    for alias in agg_only:
-        for i in range(bound):
-            value_differs.append(
-                And(
-                    f1.in_output[i],
-                    f2.in_output[i],
-                    f1.agg_values[alias][i] != f2.agg_values[alias][i],
-                )
-            )
+    # (1) equal cardinality of present tuples
+    count1 = Sum([If(t.present, IntVal(1), IntVal(0)) for t in r1]) if r1 else IntVal(0)
+    count2 = Sum([If(t.present, IntVal(1), IntVal(0)) for t in r2]) if r2 else IntVal(0)
+    same_count = count1 == count2
 
-    all_divergences = presence_differs + value_differs
-    if not all_divergences:
-        # Fallback: just assert presence differs (no aggregates in query)
-        return Or([f1.in_output[i] != f2.in_output[i] for i in range(bound)])
+    # (2) per-tuple multiplicity agreement (quantified over R1; combined with
+    # (1) this also rules out any extra distinct tuple in R2)
+    mult_ok = []
+    for t in r1:
+        m1 = Sum([If(And(u.present, _tuple_eq(t, u)), IntVal(1), IntVal(0)) for u in r1])
+        m2 = (Sum([If(And(u.present, _tuple_eq(t, u)), IntVal(1), IntVal(0)) for u in r2])
+              if r2 else IntVal(0))
+        mult_ok.append(Implies(t.present, m1 == m2))
 
-    return Or(all_divergences)
+    bag_equivalent = And(same_count, And(mult_ok)) if mult_ok else same_count
+    return Not(bag_equivalent)
 
 
 # ---------------------------------------------------------------------------
 # Divergence classification
 # ---------------------------------------------------------------------------
+
+def _eval_tuples(model, formula: QueryFormula) -> list:
+    """Materialise a query's present output tuples from the model as a list of
+    value lists, where None denotes NULL."""
+    rows = []
+    for t in formula.output:
+        if not is_true(model.evaluate(t.present, model_completion=True)):
+            continue
+        row = []
+        for sv in t.cols:
+            if is_true(model.evaluate(sv.is_null, model_completion=True)):
+                row.append(None)
+            else:
+                row.append(_z3_to_python(model.evaluate(sv.value, model_completion=True)))
+        rows.append(row)
+    return rows
+
 
 def _classify_divergence(
     model,
@@ -223,39 +261,29 @@ def _classify_divergence(
     f2: QueryFormula,
     bound: int,
 ) -> str:
-    """
-    Inspect the Z3 model to produce a human-readable divergence reason.
-    Returns one of:
-      - "row presence differs: v1 returns N rows, v2 returns M rows"
-      - "aggregate value differs for matching rows"
-      - "both row presence and aggregate value differ"
-    """
-    presence_diff_rows = []
-    value_diff_rows = []
+    """Inspect the Z3 model to produce a human-readable divergence reason."""
+    if f1.arity != f2.arity:
+        return (
+            f"output shape differs: v1 returns {f1.arity} column(s), "
+            f"v2 returns {f2.arity} column(s)"
+        )
 
-    for i in range(bound):
-        in_v1 = is_true(model.evaluate(f1.in_output[i]))
-        in_v2 = is_true(model.evaluate(f2.in_output[i]))
-
-        if in_v1 != in_v2:
-            presence_diff_rows.append(i)
-        elif in_v1 and in_v2:
-            for alias in set(f1.agg_values.keys()) & set(f2.agg_values.keys()):
-                v1_val = model.evaluate(f1.agg_values[alias][i])
-                v2_val = model.evaluate(f2.agg_values[alias][i])
-                if str(v1_val) != str(v2_val):
-                    value_diff_rows.append(i)
-                    break
+    rows1 = _eval_tuples(model, f1)
+    rows2 = _eval_tuples(model, f2)
 
     parts = []
-    if presence_diff_rows:
-        v1_count = sum(1 for i in range(bound) if is_true(model.evaluate(f1.in_output[i])))
-        v2_count = sum(1 for i in range(bound) if is_true(model.evaluate(f2.in_output[i])))
+    if len(rows1) != len(rows2):
         parts.append(
-            f"row presence differs: v1 returns {v1_count} row(s), v2 returns {v2_count} row(s)"
+            f"row count differs: v1 returns {len(rows1)} row(s), "
+            f"v2 returns {len(rows2)} row(s)"
         )
-    if value_diff_rows:
-        parts.append("aggregate value differs for row(s) present in both outputs")
+    else:
+        # Same cardinality but the bags differ in content/multiplicity.
+        from collections import Counter
+        b1 = Counter(tuple(r) for r in rows1)
+        b2 = Counter(tuple(r) for r in rows2)
+        if b1 != b2:
+            parts.append("row values differ for the same number of rows")
 
     return "; ".join(parts) if parts else "queries produce different output"
 
@@ -265,20 +293,28 @@ def _classify_divergence(
 # ---------------------------------------------------------------------------
 
 def _z3_to_python(z3_val) -> object:
-    """Convert a Z3 model value to a Python int/float/str."""
+    """Convert a Z3 model value to a Python int/float/str.
+
+    Note: a Real (RatNumRef) model value *has* an ``as_long`` method, but it
+    raises "Expected integer fraction" for non-integer rationals (e.g. -1/2).
+    We therefore branch on the value *kind* rather than attribute presence.
+    """
     if z3_val is None:
         return None
-    if hasattr(z3_val, "as_long"):
+    try:
+        if z3.is_int_value(z3_val):
+            return z3_val.as_long()
+        if z3.is_rational_value(z3_val):
+            return float(z3_val.as_fraction())
+        if z3.is_algebraic_value(z3_val):
+            return float(z3_val.as_decimal(10).rstrip("?"))
+    except Exception:
+        pass
+    # Fallbacks for anything unexpected.
+    try:
         return z3_val.as_long()
-    if hasattr(z3_val, "as_fraction"):
-        num, den = z3_val.as_fraction()
-        return float(num) / float(den)
-    if hasattr(z3_val, "as_decimal"):
-        try:
-            return float(z3_val.as_decimal(6).rstrip("?"))
-        except Exception:
-            pass
-    return str(z3_val)
+    except Exception:
+        return str(z3_val)
 
 
 def _materialize_witness(model, db: SymbolicDB) -> dict:
@@ -293,15 +329,44 @@ def _materialize_witness(model, db: SymbolicDB) -> dict:
     """
     result: dict[str, list[dict]] = {}
 
+    # Reverse the string-interning map so TEXT/TIMESTAMP cells are written back
+    # as real strings. Without this, a cell holding the interned int for
+    # 'active' is materialised as the integer 1, and the real query
+    # `WHERE status = 'active'` no longer matches — so the witness fails to
+    # reproduce the divergence under SQLite.
+    inv_intern: dict[tuple, dict[int, str]] = {}
+    for (t_name, c_name, literal), code in db._str_map.items():
+        inv_intern.setdefault((t_name, c_name), {})[code] = literal
+
+    def decode(table_name, col_name, value):
+        col = db.schema.get_table(table_name) and db.schema.get_table(table_name).get_column(col_name)
+        if col is None or col.col_type not in ("TEXT", "TIMESTAMP"):
+            return value
+        if not isinstance(value, int):
+            return value
+        mapping = inv_intern.get((table_name, col_name), {})
+        if value in mapping:
+            return mapping[value]
+        # A value never compared against a literal: synthesise a string that is
+        # guaranteed distinct from every interned literal for this column.
+        return f"__sv_{value}"
+
     for table_name, col_vars in db.vars.items():
         rows = []
         for i in range(db.bound):
             exists_var = db.exists[table_name][i]
-            if not is_true(model[exists_var]):
+            if not is_true(model.evaluate(exists_var, model_completion=True)):
                 continue
             row = {}
             for col_name, var_list in col_vars.items():
-                row[col_name] = _z3_to_python(model[var_list[i]])
+                null_var = db.nulls[table_name][col_name][i]
+                if is_true(model.evaluate(null_var, model_completion=True)):
+                    row[col_name] = None   # NULL cell
+                else:
+                    raw = _z3_to_python(
+                        model.evaluate(var_list[i], model_completion=True)
+                    )
+                    row[col_name] = decode(table_name, col_name, raw)
             rows.append(row)
         result[table_name] = rows
 
