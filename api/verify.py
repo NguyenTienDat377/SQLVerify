@@ -23,6 +23,7 @@ Returns JSON:
 """
 
 import time
+import markdown
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -38,6 +39,7 @@ from db.repositories.verification_runs import save_run, get_recent_runs, update_
 
 
 templates = Jinja2Templates(directory="web/templates")
+templates.env.filters["markdown"] = lambda text: markdown.markdown(text) if text else ""
 
 router = APIRouter(prefix="/api", tags=["verify"])
 
@@ -143,7 +145,8 @@ async def verify_equivalence(
     if result.status == "divergent" and explain == "true":
         result.explanation = await explain_result(result, v1_sql, v2_sql)
 
-    run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms)
+    user_id = getattr(request.state, "user_id", None)
+    run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms, user_id=user_id)
 
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
@@ -175,7 +178,7 @@ async def generate_explanation(run_id: str, request: Request):
 
     # Return cached explanation if already generated — no duplicate LLM call
     if row.get("explanation"):
-        safe = row["explanation"].replace("**", "")
+        safe = markdown.markdown(row["explanation"])
         html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe}</div>'
         return HTMLResponse(content=html)
 
@@ -191,7 +194,7 @@ async def generate_explanation(run_id: str, request: Request):
     explanation = await explain_result(result, row["sql_v1"], row["sql_v2"])
     await update_explanation(run_id, explanation)
 
-    safe_explanation = explanation.replace("**", "")
+    safe_explanation = markdown.markdown(explanation)
     html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe_explanation}</div>'
     return HTMLResponse(content=html)
 
@@ -258,7 +261,8 @@ async def health():
 
 @router.get("/history")
 async def history(request: Request):
-    runs = await get_recent_runs(limit=20)
+    user_id = getattr(request.state, "user_id", None)
+    runs = await get_recent_runs(limit=20, user_id=user_id)
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
             request=request,

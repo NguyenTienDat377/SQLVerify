@@ -31,6 +31,7 @@ async def save_run(
     sql_v2: str,
     dialect: str,
     duration_ms: int,
+    user_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Persist a verification run to Supabase.
@@ -42,6 +43,7 @@ async def save_run(
         sql_v2:      AI-generated query SQL text.
         dialect:     SQL dialect string.
         duration_ms: How long the verification took in milliseconds.
+        user_id:     UUID of the authenticated user, or None for anonymous.
 
     Returns:
         UUID of the inserted row, or None on failure.
@@ -59,6 +61,7 @@ async def save_run(
         "error_message":      result.error_message,
         "explanation":        result.explanation,
         "duration_ms":        duration_ms,
+        "user_id":            user_id,
     }
 
     try:
@@ -75,21 +78,24 @@ async def save_run(
 # Read
 # ---------------------------------------------------------------------------
 
-async def get_recent_runs(limit: int = 20) -> list[dict]:
+async def get_recent_runs(limit: int = 20, user_id: Optional[str] = None) -> list[dict]:
     """
     Fetch the most recent verification runs for the history panel.
 
     Returns a lightweight list — no full SQL text, just display fields.
+    Pass user_id to scope results to a single user (required once RLS is active).
     """
     try:
         client = get_client()
-        response = (
+        query = (
             client.table("verification_runs")
             .select("id, created_at, dialect, status, divergence_reason, duration_ms")
             .order("created_at", desc=True)
             .limit(limit)
-            .execute()
         )
+        if user_id:
+            query = query.eq("user_id", user_id)
+        response = query.execute()
         return response.data or []
     except Exception as e:
         print(f"[db] Failed to fetch recent runs: {e}")

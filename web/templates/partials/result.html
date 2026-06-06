@@ -38,7 +38,7 @@
             {% if result.explanation %}
             <div class="explanation-box">
                 <div class="explanation-label">AI Explanation</div>
-                {{ result.explanation | replace('**', '') }}
+                {{ result.explanation | markdown | safe }}
             </div>
             {% elif run_id %}
             <button class="btn btn-secondary"

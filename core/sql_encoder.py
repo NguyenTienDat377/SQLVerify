@@ -613,7 +613,7 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
         if side == "LEFT":
             join_type = "LEFT"
         elif side == "RIGHT":
-            raise ValueError("RIGHT JOIN is not supported in V1. Rewrite as LEFT JOIN.")
+            join_type = "RIGHT" 
         else:
             join_type = "INNER"   # default: INNER
 
@@ -726,6 +726,7 @@ def encode_query(
     join_alias = join.alias if has_join else None
     join_tname = resolve(join_alias) if has_join else None
     is_left = has_join and join.join_type == "LEFT"
+    is_right = has_join and join.join_type == "RIGHT"
 
     def cell(alias: str, col: str, i: int) -> tuple:
         return db.cell(resolve(alias), col, i)
@@ -773,8 +774,11 @@ def encode_query(
         return And(row_exists(join_alias, j), Not(ln), Not(rn), lv == rv,
                    where_right(i, j))
 
-    def has_match(i: int) -> BoolRef:
+    def has_match_left(i: int) -> BoolRef:
         return Or([join_match(i, j) for j in range(bound)]) if has_join else BoolVal(True)
+    
+    def has_match_right(j: int) -> BoolRef:
+        return Or([And(qualifies(i), join_match(i, j)) for i in range(bound)]) if has_join else BoolVal(True)
 
     def qualifies(i: int) -> BoolRef:
         return And(row_exists(from_alias, i), where_left(i))
@@ -792,23 +796,33 @@ def encode_query(
             return db.cell(resolve(alias or from_alias), col, i)
         return f
 
-    def cellfn_nullext(i: int):
+    def cellfn_nullext_left(i: int):
         def f(alias, col):
             t = resolve(alias or from_alias)
             if has_join and t == join_tname:
                 return (BoolVal(True), IntVal(0))  # right side is NULL-extended
             return db.cell(t, col, i)
         return f
+    
+    def cellfn_nullext_right(j: int):
+        def f(alias, col):
+            t = resolve(alias or from_alias)
+            if has_join and t != join_tname:  # FROM (left) side is NULL-extended
+                return (BoolVal(True), IntVal(0))
+            return db.cell(t, col, j)
+        return f
 
     # ── Projection of one SELECT column to a SymValue ────────────────────────
-    def proj_col(sel: ParsedSelectExpr, i: int, j: Optional[int],
-                 null_ext: bool = False) -> SymValue:
+    def proj_col(sel: ParsedSelectExpr, i: Optional[int], j: Optional[int],
+                 null_ext: bool = False, null_ext_right: bool = False) -> SymValue:
         t = resolve(sel.table_alias or from_alias)
         if has_join and t == join_tname:
             if null_ext:
                 return SymValue(BoolVal(True), IntVal(0))
             n, v = db.cell(t, sel.col_name, j)
             return SymValue(n, v)
+        if null_ext_right:
+            return SymValue(BoolVal(True), IntVal(0))
         n, v = db.cell(t, sel.col_name, i)
         return SymValue(n, v)
 
@@ -900,7 +914,7 @@ def encode_query(
                     for j in range(bound):
                         contribs.append((And(member, join_match(i, j)), cellfn_pair(i, j)))
                     if is_left:
-                        contribs.append((And(member, Not(has_match(i))), cellfn_nullext(i)))
+                        contribs.append((And(member, Not(has_match_left(i))), cellfn_nullext_left(i)))
                 else:
                     contribs.append((member, cellfn_single(i)))
 
@@ -920,6 +934,45 @@ def encode_query(
             col_by_alias = {parsed.select_exprs[k].alias: cols[k] for k in range(arity)}
             output.append(OutputTuple(_having_present(base_present, col_by_alias), cols))
 
+        if is_right:
+            def _right_nullext_cell(alias: str, col: str, row_idx: int) -> tuple:
+                t = resolve(alias)
+                if t != join_tname:
+                    return (BoolVal(True), IntVal(0))
+                return db.cell(t, col, row_idx)
+
+            def group_key_eq_right(j1: int, j2: int) -> BoolRef:
+                clauses = []
+                for (galias, gcol) in parsed.group_by:
+                    n1, v1 = _right_nullext_cell(galias, gcol, j1)
+                    n2, v2 = _right_nullext_cell(galias, gcol, j2)
+                    clauses.append(Or(And(n1, n2), And(Not(n1), Not(n2), v1 == v2)))
+                return And(clauses) if clauses else BoolVal(True)
+
+            def qualifies_right(j: int) -> BoolRef:
+                return And(row_exists(join_alias, j), Not(has_match_right(j)))
+
+            for g in range(bound):
+                earlier_r = [Not(And(qualifies_right(h), group_key_eq_right(h, g))) for h in range(g)]
+                leader_r = And(qualifies_right(g), *earlier_r) if earlier_r else qualifies_right(g)
+
+                contribs_r = []
+                for j in range(bound):
+                    member_r = And(qualifies_right(j), group_key_eq_right(j, g))
+                    contribs_r.append((member_r, cellfn_nullext_right(j)))
+
+                nonempty_r = Or([a for a, _ in contribs_r]) if contribs_r else BoolVal(False)
+                base_present_r = And(leader_r, nonempty_r)
+
+                cols_r = []
+                for sel in parsed.select_exprs:
+                    if sel.expr_type == "column":
+                        cols_r.append(proj_col(sel, None, g, null_ext_right=True))
+                    else:
+                        cols_r.append(agg_value(sel, contribs_r))
+                col_by_alias_r = {parsed.select_exprs[k].alias: cols_r[k] for k in range(arity)}
+                output.append(OutputTuple(_having_present(base_present_r, col_by_alias_r), cols_r))
+
     elif has_agg:
         # ── Aggregate without GROUP BY: exactly one output row. ──────────────
         contribs = []
@@ -928,9 +981,12 @@ def encode_query(
                 for j in range(bound):
                     contribs.append((And(qualifies(i), join_match(i, j)), cellfn_pair(i, j)))
                 if is_left:
-                    contribs.append((And(qualifies(i), Not(has_match(i))), cellfn_nullext(i)))
+                    contribs.append((And(qualifies(i), Not(has_match_left(i))), cellfn_nullext_left(i)))
             else:
                 contribs.append((qualifies(i), cellfn_single(i)))
+        if is_right:
+            for j in range(bound):
+                contribs.append((And(row_exists(join_alias, j), Not(has_match_right(j))), cellfn_nullext_right(j)))
 
         cols = []
         for sel in parsed.select_exprs:
@@ -954,7 +1010,11 @@ def encode_query(
                 output.append(OutputTuple(And(qualifies(i), join_match(i, j)), cols))
             if is_left:
                 cols = [proj_col(sel, i, None, null_ext=True) for sel in parsed.select_exprs]
-                output.append(OutputTuple(And(qualifies(i), Not(has_match(i))), cols))
+                output.append(OutputTuple(And(qualifies(i), Not(has_match_left(i))), cols))
+        if is_right:
+            for j in range(bound):
+                cols = [proj_col(sel, None, j, null_ext_right=True) for sel in parsed.select_exprs]
+                output.append(OutputTuple(And(row_exists(join_alias, j), Not(has_match_right(j))), cols))
 
     return QueryFormula(
         output=output,

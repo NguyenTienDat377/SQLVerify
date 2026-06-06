@@ -17,6 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from api.verify import router as verify_router
+from api.auth import router as auth_router
+from auth.middleware import JWTMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,7 +37,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# JWT auth middleware (replaces static API key middleware)
+app.add_middleware(JWTMiddleware)
+
 # Routers
+app.include_router(auth_router)
 app.include_router(verify_router)
 
 # Mount static files
@@ -47,4 +53,13 @@ templates = Jinja2Templates(directory="web/templates")
 
 @app.get("/")
 async def root(request: Request):
-    return templates.TemplateResponse(request=request, name="verify.html")
+    return templates.TemplateResponse(request=request, name="landing.html")
+
+@app.get("/verify")
+async def verify_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="verify.html",
+        context={"user_email": user_email},
+    )
