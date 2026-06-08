@@ -102,6 +102,26 @@ h1, h2, h3, h4 {
   border-color: var(--text-secondary);
 }
 
+.btn-github {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  text-decoration: none;
+  padding: 0.75rem 1.5rem;
+  background: #24292e;
+  border: 1px solid #444c56;
+  border-radius: 8px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-github:hover {
+  background: #2d333b;
+  border-color: #768390;
+}
+
 .btn-github-login {
   display: inline-flex;
   align-items: center;
