@@ -79,17 +79,31 @@ async def login(request: Request):
 # ---------------------------------------------------------------------------
 
 @router.get("/callback")
-async def callback(request: Request, code: str):
+async def callback(request: Request, code: str = None, error: str = None, error_description: str = None):
     """Exchange the OAuth code for a Supabase session and set auth cookies."""
-    client = _supabase()
-    code_verifier = request.cookies.get("sb-pkce-verifier")
+    if error:
+        return RedirectResponse(url=f"/?auth_error={error_description or error}")
 
-    exchange_args: dict = {"auth_code": code}
-    if code_verifier:
-        exchange_args["code_verifier"] = code_verifier
+    if not code:
+        return RedirectResponse(url="/?auth_error=missing_code")
 
-    session_resp = client.auth.exchange_code_for_session(exchange_args)
-    session = session_resp.session
+    try:
+        client = _supabase()
+        code_verifier = request.cookies.get("sb-pkce-verifier")
+
+        exchange_args: dict = {"auth_code": code}
+        if code_verifier:
+            exchange_args["code_verifier"] = code_verifier
+
+        session_resp = client.auth.exchange_code_for_session(exchange_args)
+        session = session_resp.session
+
+        if not session:
+            return RedirectResponse(url="/?auth_error=no_session")
+
+    except Exception as e:
+        print(f"[auth] callback error: {e}")
+        return RedirectResponse(url="/?auth_error=exchange_failed")
 
     secure = _is_secure(request)
     response = RedirectResponse(url="/verify")
@@ -104,7 +118,7 @@ async def callback(request: Request, code: str):
     response.set_cookie(
         "sb-refresh-token",
         session.refresh_token,
-        max_age=60 * 60 * 24 * 7,  # 7 days
+        max_age=60 * 60 * 24 * 7,
         secure=secure,
         **_COOKIE_OPTS,
     )
