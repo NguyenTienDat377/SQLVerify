@@ -25,6 +25,7 @@ Returns JSON:
 import time
 import markdown
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
+from loguru import logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -128,8 +129,8 @@ async def verify_equivalence(
     v1_sql   = await _get_content(query_v1_file, query_v1_text, "query_v1")
     v2_sql   = await _get_content(query_v2_file, query_v2_text, "query_v2")
 
+    logger.info("Verification started | dialect={dialect} bound={bound}", dialect=dialect, bound=bound)
     start = time.monotonic()
-    # Run verification (all errors caught inside check_equivalence)
     result = check_equivalence(
         ddl_sql=ddl_sql,
         sql_v1=v1_sql,
@@ -140,6 +141,7 @@ async def verify_equivalence(
     )
 
     duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info("Verification done | status={status} duration={duration}ms", status=result.status, duration=duration_ms)
 
     # Only call LLM when the user explicitly requested an explanation
     if result.status == "divergent" and explain == "true":

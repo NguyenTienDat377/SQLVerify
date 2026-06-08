@@ -16,6 +16,8 @@ import time
 from typing import Optional
 from uuid import UUID
 
+from loguru import logger
+
 from db.client import get_client
 from core.models import VerificationResult
 
@@ -70,7 +72,7 @@ async def save_run(
         return response.data[0]["id"] if response.data else None
     except Exception as e:
         # Never let DB failure break the verification response
-        print(f"[db] Failed to save verification run: {e}")
+        logger.error("Failed to save verification run: {err}", err=e)
         return None
 
 
@@ -98,7 +100,7 @@ async def get_recent_runs(limit: int = 20, user_id: Optional[str] = None) -> lis
         response = query.execute()
         return response.data or []
     except Exception as e:
-        print(f"[db] Failed to fetch recent runs: {e}")
+        logger.error("Failed to fetch recent runs: {err}", err=e)
         return []
 
 
@@ -117,7 +119,7 @@ async def get_run_by_id(run_id: str) -> Optional[dict]:
         )
         return response.data
     except Exception as e:
-        print(f"[db] Failed to fetch run {run_id}: {e}")
+        logger.error("Failed to fetch run {run_id}: {err}", run_id=run_id, err=e)
         return None
 
 
@@ -128,5 +130,5 @@ async def update_explanation(run_id: str, explanation: str) -> bool:
         client.table("verification_runs").update({"explanation": explanation}).eq("id", run_id).execute()
         return True
     except Exception as e:
-        print(f"[db] Failed to update explanation for {run_id}: {e}")
+        logger.error("Failed to update explanation for {run_id}: {err}", run_id=run_id, err=e)
         return False

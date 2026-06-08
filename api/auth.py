@@ -24,6 +24,7 @@ import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from loguru import logger
 from supabase import create_client
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -59,6 +60,7 @@ async def login(request: Request):
         "options": {"redirect_to": callback_url},
     })
 
+    logger.info("GitHub OAuth initiated → {url}", url=callback_url)
     response = RedirectResponse(url=oauth.url)
 
     # Store PKCE verifier if the client generated one
@@ -82,9 +84,11 @@ async def login(request: Request):
 async def callback(request: Request, code: str = None, error: str = None, error_description: str = None):
     """Exchange the OAuth code for a Supabase session and set auth cookies."""
     if error:
+        logger.warning("OAuth callback error from provider: {err}", err=error_description or error)
         return RedirectResponse(url=f"/?auth_error={error_description or error}")
 
     if not code:
+        logger.warning("OAuth callback missing code parameter")
         return RedirectResponse(url="/?auth_error=missing_code")
 
     try:
@@ -99,12 +103,14 @@ async def callback(request: Request, code: str = None, error: str = None, error_
         session = session_resp.session
 
         if not session:
+            logger.error("Code exchange returned no session")
             return RedirectResponse(url="/?auth_error=no_session")
 
     except Exception as e:
-        print(f"[auth] callback error: {e}")
+        logger.exception("Code exchange failed: {err}", err=e)
         return RedirectResponse(url="/?auth_error=exchange_failed")
 
+    logger.info("User authenticated: {uid}", uid=session.user.id if session.user else "unknown")
     secure = _is_secure(request)
     response = RedirectResponse(url="/verify")
 
