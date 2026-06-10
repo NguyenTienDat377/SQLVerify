@@ -134,10 +134,15 @@ File exists but is empty. Intended to check whether a single query satisfies sch
 File exists but is empty. Intended to clean up and format Z3 model output into human-readable counterexample databases. Currently handled inline in `equivalence.py`.
 
 ### 4. Tests
-No test suite yet. When writing tests, cover:
+`tests/smoke_test.py` exists — 28 end-to-end checks over `check_equivalence()`:
+known equivalent/divergent pairs (incl. LEFT/RIGHT JOIN ON-vs-WHERE cases) and
+fail-closed rejection of unsupported constructs. Run with
+`.venv/bin/python tests/smoke_test.py` (no pytest required, but pytest-compatible).
+
+Still missing:
 - `core/ddl_parser.py` — DDL parsing edge cases
-- `core/equivalence.py` — known equivalent and known divergent query pairs
 - `api/verify.py` — endpoint smoke tests
+- Differential testing (random query pairs vs concrete SQLite execution)
 
 ---
 
@@ -146,7 +151,9 @@ No test suite yet. When writing tests, cover:
 | Decision | Rationale |
 |---|---|
 | `bound=3` hardcoded in `equivalence.py` | Catches >95% of real SQL semantic bugs. Not exposed in UI — would confuse engineers. Power users can override via env var. |
-| V1 scope: single JOIN only (INNER or LEFT) | Keeps Z3 encoding tractable. No CTEs, window functions, subqueries, UNION, RIGHT/FULL OUTER JOIN. |
+| V1 scope: single JOIN only (INNER, LEFT, or RIGHT) | Keeps Z3 encoding tractable. No CTEs, window functions, subqueries, UNION, FULL OUTER JOIN, self-joins. ON and WHERE are encoded separately — the distinction changes outer-join results. |
+| Fail-closed parsing/encoding | Any SQL construct outside the supported subset raises `ValueError` (→ status `error`) instead of being silently dropped. A dropped predicate or SELECT expression weakens the encoding and can produce a false "equivalent" — the one failure mode a verifier must not have. Never "skip" unsupported syntax. |
+| Witness cross-check in `equivalence.py` | After Z3 finds a divergence, both queries run on the SQLite witness; if their outputs agree, the verdict is downgraded to `error` (encoder bug) instead of showing a fake counterexample. |
 | HTMX for frontend interactivity | No React build step, no npm. Jinja2 + HTMX keeps the stack simple and server-rendered. |
 | Multi-LLM provider abstraction | Factory pattern in `explainer/providers.py`. Adding a new provider = one new class + one line in `get_provider()`. Never add provider-specific logic outside `providers.py`. |
 | Explainer is on-demand only | The "Explain" button is explicit user action. Never auto-call LLM on every verification — cost and latency. |
@@ -158,19 +165,26 @@ No test suite yet. When writing tests, cover:
 
 ## V1 known limitations
 
-- Single JOIN per query only (INNER or LEFT). No RIGHT, FULL OUTER.
+Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored.
+
+- Single JOIN per query only (INNER, LEFT, or RIGHT). No FULL OUTER, CROSS, or self-joins. JOIN ON must be a single column equality.
 - No CTEs (`WITH` clauses)
 - No window functions (`ROW_NUMBER`, `RANK`, etc.)
-- No subqueries or `UNION`
-- NULLs ARE modeled (each cell is a `(is_null, value)` pair, three-valued logic per the VeriEQL paper): `IS NULL` / `IS NOT NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT JOIN null-extension are all encoded. NOT NULL / PK columns forced non-NULL; FK columns may be NULL.
-- WHERE/HAVING predicates compare a column to a *literal* only — column-to-column predicates (e.g. `WHERE b = a`) are silently dropped
-- TEXT/TIMESTAMP equality is symbolic (interned to int) — string ordering not supported
+- No subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`
+- No `OR` / `IN` / `BETWEEN` / `LIKE` in WHERE/HAVING — AND-chains of comparisons and `IS [NOT] NULL` only
+- NULLs ARE modeled (each cell is a `(is_null, value)` pair, three-valued logic per the VeriEQL paper): `IS NULL` / `IS NOT NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT JOIN null-extension are all encoded. NOT NULL / PK columns forced non-NULL; FK columns may be NULL.
+- WHERE/HAVING predicates: column vs literal AND column vs column (e.g. `WHERE b = a`) are both encoded under three-valued logic
+- ON vs WHERE is encoded faithfully for outer joins: a right-table filter in WHERE makes LEFT JOIN ≡ INNER JOIN; `WHERE right.col IS NULL` keeps the anti-join idiom
+- TEXT/TIMESTAMP equality is symbolic (globally interned to int) — ordering comparisons (`>`, `<`) on TEXT/TIMESTAMP are rejected
+- Boolean literals in predicates (`WHERE active = TRUE`) are rejected
 - CHECK constraints parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs)
-- Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list/ORDER BY semantics
-- GROUP BY merges rows with equal keys (Dedup); group keys are assumed to come from the FROM table
-- Integer value domain is a finite window `[-bound*4, bound*4]` (includes 0/negatives) — an "equivalent" verdict is sound only within this window
-- `bound` (default 5) may miss bugs requiring more row interactions (rare in practice)
+- Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list semantics — `ORDER BY` is accepted but ignored
+- GROUP BY merges rows with equal keys (Dedup); group keys and bare SELECT columns must come from the FROM table (swap the join direction if you need the other table's keys). RIGHT JOIN + GROUP BY requires non-nullable group keys.
+- HAVING supports aggregate comparisons; the aggregate does NOT need to appear in the SELECT list
+- Integer value domain is a finite window `[-(bound*4 + max|literal|), bound*4 + max|literal|]` — automatically widened to cover every numeric literal in the queries; an "equivalent" verdict is sound only within this window
+- `bound` (default 3) may miss bugs requiring more row interactions (rare in practice)
 - No cross-dialect comparison (e.g. PostgreSQL vs MySQL semantics)
+- On a `divergent` verdict, both queries are re-run on the SQLite witness; if outputs agree the run is reported as `error` (internal encoding bug) rather than trusting Z3
 
 ---
 
@@ -223,6 +237,48 @@ CREATE TABLE verification_runs (
     duration_ms     INT,
     created_at      TIMESTAMPTZ DEFAULT now()
 );
+```
+
+## Migration #1
+
+```sql
+ALTER TABLE public.verification_runs
+    ADD COLUMN IF NOT EXISTS user_id UUID
+        REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS verification_runs_user_id_idx
+    ON public.verification_runs (user_id);
+
+─────────
+DROP POLICY IF EXISTS "Allow all"                       ON public.verification_runs;
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.verification_runs;
+DROP POLICY IF EXISTS "Enable insert for all users"      ON public.verification_runs;
+
+
+CREATE POLICY "users_select_own_runs"
+    ON public.verification_runs
+    FOR SELECT
+    TO authenticated
+    USING (user_id = auth.uid());
+
+
+CREATE POLICY "users_insert_own_runs"
+    ON public.verification_runs
+    FOR INSERT
+    TO authenticated
+    WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "users_update_own_runs"
+    ON public.verification_runs
+    FOR UPDATE
+    TO authenticated
+    USING  (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+──────────────────────────────────────
+GRANT SELECT, INSERT, UPDATE
+    ON public.verification_runs
+    TO authenticated;
+
 ```
 
 RLS is enabled. The service key in `db/client.py` bypasses RLS for server-side writes.

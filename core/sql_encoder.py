@@ -4,15 +4,25 @@ core/sql_encoder.py
 Parses a SELECT query and encodes it as Z3 formulas over a symbolic database.
 
 V1 supported subset:
-  SELECT   — column refs, SUM, COUNT(*), COUNT(col), COALESCE(SUM(...), 0)
+  SELECT   — column refs, SUM(col), COUNT(*), COUNT(col), COALESCE(agg, default)
   FROM     — single table with alias
-  JOIN     — one INNER JOIN or LEFT JOIN with simple ON equality condition
-  WHERE    — AND chains of EQ / GT / GTE / LT / LTE / IS NULL / IS NOT NULL
+  JOIN     — one INNER, LEFT, or RIGHT join with a simple ON equality condition
+  WHERE    — AND chains of comparisons (column vs literal, column vs column),
+             IS NULL / IS NOT NULL
   GROUP BY — one or more columns from the FROM table
-  HAVING   — simple aggregate comparisons (SUM > val, COUNT > val)
+  HAVING   — aggregate comparisons (SUM(col) > v, COUNT(*) = v, ...)
 
-Out of scope for V1:
-  Window functions, CTEs, subqueries, UNION, ORDER BY, LIMIT
+Fail-closed policy: anything outside this subset raises ValueError instead of
+being silently dropped. A verifier must never weaken the encoded query — a
+dropped predicate or SELECT expression can turn a real divergence into a false
+"equivalent" verdict, which is the one failure mode this tool cannot have.
+
+Out of scope for V1 (all rejected with ValueError):
+  FULL OUTER / CROSS joins, self-joins, multiple joins, OR / IN / BETWEEN /
+  LIKE predicates, window functions, CTEs, subqueries, UNION, DISTINCT,
+  LIMIT/OFFSET, string/timestamp ordering comparisons.
+  (ORDER BY is accepted but ignored — equivalence is checked under bag
+  semantics, where output order is immaterial.)
 
 Usage:
     db     = build_symbolic_db(schema, bound=3)
@@ -28,15 +38,15 @@ Usage:
 
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, replace
 from typing import Optional
 
 import sqlglot
 import sqlglot.expressions as exp
 from z3 import (
     And, Bool, BoolVal, If, Implies, Int, IntVal, Or, Real, RealVal,
-    Sum, Not, ArithRef, BoolRef, Z3Exception
+    Sum, Not, BoolRef,
 )
 
 from core.models import SchemaModel
@@ -44,7 +54,7 @@ from core.models import SchemaModel
 
 # ── Bound ────────────────────────────────────────────────────────────────────
 
-DEFAULT_BOUND = 5  # symbolic rows per table
+DEFAULT_BOUND = 3  # symbolic rows per table
                     # increase for more coverage, decrease for speed
 
 
@@ -55,7 +65,8 @@ class ParsedCondition:
     """A single WHERE / HAVING predicate."""
     op: str                          # 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte'
                                      # | 'is_null' | 'is_not_null'
-                                     # | 'having_gt' | 'having_gte' | 'having_lt' | 'having_lte'
+                                     # | 'having_eq' | 'having_neq' | 'having_gt'
+                                     # | 'having_gte' | 'having_lt' | 'having_lte'
     table_alias: Optional[str]       # alias of the table (e.g. 'a', 't')
     col: Optional[str]               # column name
     value: Optional[object]          # literal value (int/float/str) or None
@@ -86,10 +97,10 @@ class ParsedSelectExpr:
 class ParsedJoin:
     table_name: str
     alias: str
-    join_type: str                # 'INNER' | 'LEFT'
-    on_left_alias: str            # alias on left side of ON condition
+    join_type: str                # 'INNER' | 'LEFT' | 'RIGHT'
+    on_left_alias: Optional[str]  # alias on left side of ON condition
     on_left_col: str
-    on_right_alias: str           # alias on right side of ON condition
+    on_right_alias: Optional[str] # alias on right side of ON condition
     on_right_col: str
 
 
@@ -99,7 +110,7 @@ class ParsedQuery:
     from_alias: str
     joins: list[ParsedJoin]
     select_exprs: list[ParsedSelectExpr]
-    group_by: list[tuple[str, str]]      # [(table_alias, col_name)]
+    group_by: list[tuple[Optional[str], str]]    # [(table_alias, col_name)]
     where_conditions: list[ParsedCondition]
     having_conditions: list[ParsedCondition]
 
@@ -114,7 +125,10 @@ class SymbolicDB:
     REAL columns are encoded as Real.
     INTEGER / BOOLEAN columns are encoded as Int.
 
-    String literals in WHERE clauses are interned to integers via intern_string().
+    String literals are interned to integers via intern_string(). The intern
+    namespace is GLOBAL (one code per distinct string), not per-column:
+    per-column interning let 'active' in one column and 'pending' in another
+    share the same code, making column-to-column TEXT equality unsound.
     """
 
     def __init__(self, schema: SchemaModel, bound: int = DEFAULT_BOUND):
@@ -128,9 +142,11 @@ class SymbolicDB:
         self.nulls: dict[str, dict[str, list[BoolRef]]] = {}
         # exists[table][row_idx] → Bool (= ¬Del(t) from the paper)
         self.exists: dict[str, list[BoolRef]] = {}
-        # string interning: (table_name, col_name, literal) → int
-        self._str_map: dict[tuple, int] = {}
-        self._str_counter: dict[tuple[str, str], int] = defaultdict(lambda: 1)
+        # global string interning: literal → int code (1-based)
+        self._str_map: dict[str, int] = {}
+        # largest |numeric literal| seen while encoding — the finite value
+        # domain must cover it (see note_numeric_literal / domain_constraints)
+        self._max_numeric_literal: float = 0.0
         self._build()
 
     def _build(self) -> None:
@@ -177,17 +193,24 @@ class SymbolicDB:
             self.vars[table_name][col_name][row_idx],
         )
 
-    def intern_string(self, table_name: str, col_name: str, value: str) -> int:
+    def intern_string(self, value: str) -> int:
         """
         Map a string literal to a stable integer for Z3 equality checks.
-        'active' → 1, 'inactive' → 2, etc. (per column namespace)
+        'active' → 1, 'inactive' → 2, etc. — one global namespace, so equal
+        codes always mean equal strings across every table and column.
         """
-        key = (table_name, col_name, value)
-        if key not in self._str_map:
-            counter_key = (table_name, col_name)
-            self._str_map[key] = self._str_counter[counter_key]
-            self._str_counter[counter_key] += 1
-        return self._str_map[key]
+        if value not in self._str_map:
+            self._str_map[value] = len(self._str_map) + 1
+        return self._str_map[value]
+
+    def note_numeric_literal(self, value) -> None:
+        """Record a numeric literal used in a query predicate.
+
+        The finite value window must reach every literal the queries compare
+        against: with a domain of [-12, 12], `x > 100` and `x >= 100` are
+        vacuously "equivalent" because no symbolic cell can ever hold 100.
+        """
+        self._max_numeric_literal = max(self._max_numeric_literal, abs(float(value)))
 
     def domain_constraints(self) -> list:
         """
@@ -196,6 +219,9 @@ class SymbolicDB:
           - Primary key uniqueness
           - Foreign key referential integrity
           - NOT NULL (implied by bounds when nullable=False)
+
+        Call this AFTER encode_query() so the symbolic-enum domain can account
+        for every interned string literal.
         """
         constraints = []
         # Value-domain half-width. The paper uses an unbounded integer theory;
@@ -203,7 +229,12 @@ class SymbolicDB:
         # zero so that 0 and negative values (e.g. WHERE x = 0, balances) are
         # reachable. A domain that started at 1 made "equivalent" verdicts
         # unsound — divergences needing 0/negatives could never be found.
-        span = self.bound * 4
+        # The window is widened past every numeric literal the queries use,
+        # otherwise e.g. `x > 100` vs `x >= 100` are vacuously equivalent.
+        span = self.bound * 4 + math.ceil(self._max_numeric_literal)
+        # Symbolic-enum domain must cover every interned literal plus head-room
+        # for "fresh" values distinct from all literals.
+        enum_max = self.bound * 3 + len(self._str_map)
 
         for table_name, table in self.schema.tables.items():
             exists = self.exists[table_name]
@@ -221,7 +252,7 @@ class SymbolicDB:
                         bound_c = And(var >= RealVal(-span * 250), var <= RealVal(span * 250))
                     elif col.col_type in ("TEXT", "TIMESTAMP", "BOOLEAN"):
                         # Symbolic enum: small positive integer domain (interned).
-                        bound_c = And(var >= 1, var <= self.bound * 3)
+                        bound_c = And(var >= 1, var <= enum_max)
                     else:  # INTEGER
                         bound_c = And(var >= -span, var <= span)
                     constraints.append(Implies(And(row_exists, not_null), bound_c))
@@ -345,144 +376,151 @@ class QueryFormula:
 
 # ── SQL parser ───────────────────────────────────────────────────────────────
 
-def _parse_conditions(node: exp.Expression) -> list[ParsedCondition]:
-    """Recursively extract WHERE / HAVING conditions from an AST node."""
-    if node is None:
-        return []
+_COMPARISON_OPS = {
+    exp.EQ: "eq", exp.NEQ: "neq",
+    exp.GT: "gt", exp.GTE: "gte",
+    exp.LT: "lt", exp.LTE: "lte",
+}
 
-    results: list[ParsedCondition] = []
-
-    if isinstance(node, exp.And):
-        results.extend(_parse_conditions(node.left))
-        results.extend(_parse_conditions(node.right))
-        return results
-
-    # EQ: col = literal  or  col = col
-    if isinstance(node, exp.EQ):
-        left, right = node.this, node.expression
-        if isinstance(left, exp.Column):
-            tbl = left.args.get("table")
-            if isinstance(right, exp.Column):
-                rtbl = right.args.get("table")
-                results.append(ParsedCondition(
-                    op="eq",
-                    table_alias=tbl.name if tbl else None,
-                    col=left.name,
-                    value=None,
-                    rhs_table_alias=rtbl.name if rtbl else None,
-                    rhs_col=right.name,
-                ))
-            else:
-                results.append(ParsedCondition(
-                    op="eq",
-                    table_alias=tbl.name if tbl else None,
-                    col=left.name,
-                    value=_literal_value(right),
-                ))
-        return results
-
-    # Comparison operators
-    op_map = {
-        exp.GT: "gt", exp.GTE: "gte",
-        exp.LT: "lt", exp.LTE: "lte",
-        exp.NEQ: "neq",
-    }
-    for node_type, op_str in op_map.items():
-        if isinstance(node, node_type):
-            left, right = node.this, node.expression
-            # Column comparison
-            if isinstance(left, exp.Column):
-                tbl = left.args.get("table")
-                if isinstance(right, exp.Column):
-                    rtbl = right.args.get("table")
-                    results.append(ParsedCondition(
-                        op=op_str,
-                        table_alias=tbl.name if tbl else None,
-                        col=left.name,
-                        value=None,
-                        rhs_table_alias=rtbl.name if rtbl else None,
-                        rhs_col=right.name,
-                    ))
-                else:
-                    results.append(ParsedCondition(
-                        op=op_str,
-                        table_alias=tbl.name if tbl else None,
-                        col=left.name,
-                        value=_literal_value(right),
-                    ))
-                return results
-            # Aggregate in HAVING (SUM/COUNT > val)
-            if isinstance(left, (exp.Sum, exp.Count)):
-                agg_type, agg_col, agg_tbl = _parse_aggregate(left)
-                results.append(ParsedCondition(
-                    op=f"having_{op_str}",
-                    table_alias=None,
-                    col=None,
-                    value=_literal_value(right),
-                    agg_type=agg_type,
-                    agg_col=agg_col,
-                    agg_table_alias=agg_tbl,
-                ))
-                return results
-
-    # IS NULL / IS NOT NULL
-    if isinstance(node, exp.Is):
-        col_node = node.this
-        if isinstance(col_node, exp.Column):
-            tbl = col_node.args.get("table")
-            is_null = isinstance(node.expression, exp.Null)
-            results.append(ParsedCondition(
-                op="is_null" if is_null else "is_not_null",
-                table_alias=tbl.name if tbl else None,
-                col=col_node.name,
-                value=None,
-            ))
-
-    if isinstance(node, exp.Not):
-        inner = node.this
-        if isinstance(inner, exp.Is):
-            col_node = inner.this
-            if isinstance(col_node, exp.Column):
-                tbl = col_node.args.get("table")
-                results.append(ParsedCondition(
-                    op="is_not_null",
-                    table_alias=tbl.name if tbl else None,
-                    col=col_node.name,
-                    value=None,
-                ))
-        else:
-            negation_map = {
-                "gt": "lte", "gte": "lt",
-                "lt": "gte", "lte": "gt",
-                "eq": "neq", "neq": "eq",
-            }
-            for cond in _parse_conditions(inner):
-                if cond.op in negation_map:
-                    results.append(ParsedCondition(
-                        op=negation_map[cond.op],
-                        table_alias=cond.table_alias,
-                        col=cond.col,
-                        value=cond.value,
-                        agg_type=cond.agg_type,
-                        agg_col=cond.agg_col,
-                        agg_table_alias=cond.agg_table_alias,
-                        rhs_table_alias=cond.rhs_table_alias,
-                        rhs_col=cond.rhs_col,
-                    ))
-
-    return results
+_NEGATION_MAP = {
+    "gt": "lte", "gte": "lt",
+    "lt": "gte", "lte": "gt",
+    "eq": "neq", "neq": "eq",
+}
 
 
-def _literal_value(node: exp.Expression) -> Optional[object]:
-    """Extract a Python int/float/str from a literal AST node."""
+def _require_literal(node: exp.Expression) -> object:
+    """Extract a Python int/float/str from a literal AST node, or raise.
+
+    Fail-closed: an unsupported right-hand side (boolean, NULL, expression,
+    function call, ...) must abort encoding rather than drop the predicate.
+    """
     if isinstance(node, exp.Literal):
         if node.is_number:
             val = node.this
             return float(val) if "." in val else int(val)
         return node.this   # string (without quotes)
+    if isinstance(node, exp.Neg) and isinstance(node.this, exp.Literal) and node.this.is_number:
+        val = node.this.this
+        return -(float(val) if "." in val else int(val))
     if isinstance(node, exp.Null):
-        return None
-    return None
+        raise ValueError(
+            f"Comparison to NULL ({node.sql()}) is always NULL in SQL — "
+            "use IS NULL / IS NOT NULL instead."
+        )
+    raise ValueError(f"Unsupported literal in predicate: {node.sql()}")
+
+
+def _parse_conditions(node: exp.Expression) -> list[ParsedCondition]:
+    """Recursively extract WHERE / HAVING conditions from an AST node.
+
+    Raises ValueError on anything outside the supported subset (OR, IN,
+    BETWEEN, LIKE, ...). Silently dropping a predicate would weaken the
+    encoded query and could produce a false 'equivalent' verdict.
+    """
+    if node is None:
+        return []
+
+    if isinstance(node, exp.Paren):
+        return _parse_conditions(node.this)
+
+    if isinstance(node, exp.And):
+        return _parse_conditions(node.left) + _parse_conditions(node.right)
+
+    # Comparison operators: col vs literal, col vs col, aggregate vs literal
+    for node_type, op_str in _COMPARISON_OPS.items():
+        if not isinstance(node, node_type):
+            continue
+        left, right = node.this, node.expression
+
+        if isinstance(left, exp.Column):
+            tbl = left.args.get("table")
+            if isinstance(right, exp.Column):
+                rtbl = right.args.get("table")
+                return [ParsedCondition(
+                    op=op_str,
+                    table_alias=tbl.name if tbl else None,
+                    col=left.name,
+                    value=None,
+                    rhs_table_alias=rtbl.name if rtbl else None,
+                    rhs_col=right.name,
+                )]
+            return [ParsedCondition(
+                op=op_str,
+                table_alias=tbl.name if tbl else None,
+                col=left.name,
+                value=_require_literal(right),
+            )]
+
+        # Aggregate comparison in HAVING (SUM(x) > v, COUNT(*) = v, ...)
+        if isinstance(left, (exp.Sum, exp.Count)):
+            agg_type, agg_col, agg_tbl = _parse_aggregate(left)
+            return [ParsedCondition(
+                op=f"having_{op_str}",
+                table_alias=None,
+                col=None,
+                value=_require_literal(right),
+                agg_type=agg_type,
+                agg_col=agg_col,
+                agg_table_alias=agg_tbl,
+            )]
+
+        raise ValueError(f"Unsupported comparison: {node.sql()}")
+
+    # IS NULL
+    if isinstance(node, exp.Is):
+        col_node = node.this
+        if isinstance(col_node, exp.Column) and isinstance(node.expression, exp.Null):
+            tbl = col_node.args.get("table")
+            return [ParsedCondition(
+                op="is_null",
+                table_alias=tbl.name if tbl else None,
+                col=col_node.name,
+                value=None,
+            )]
+        raise ValueError(f"Unsupported IS predicate: {node.sql()}")
+
+    # NOT — IS NOT NULL, or negation of a single comparison
+    if isinstance(node, exp.Not):
+        inner = node.this
+        while isinstance(inner, exp.Paren):
+            inner = inner.this
+
+        if isinstance(inner, exp.Is):
+            col_node = inner.this
+            if isinstance(col_node, exp.Column) and isinstance(inner.expression, exp.Null):
+                tbl = col_node.args.get("table")
+                return [ParsedCondition(
+                    op="is_not_null",
+                    table_alias=tbl.name if tbl else None,
+                    col=col_node.name,
+                    value=None,
+                )]
+            raise ValueError(f"Unsupported IS predicate: {node.sql()}")
+
+        conds = _parse_conditions(inner)
+        # NOT over an AND-chain is an OR by De Morgan — out of scope. Negating
+        # each conjunct independently would be silently wrong.
+        if len(conds) != 1:
+            raise ValueError(f"Unsupported negation: {node.sql()}")
+        cond = conds[0]
+        base = cond.op
+        prefix = ""
+        if base.startswith("having_"):
+            prefix, base = "having_", base[len("having_"):]
+        if base == "is_null":
+            return [replace(cond, op=prefix + "is_not_null")]
+        if base == "is_not_null":
+            return [replace(cond, op=prefix + "is_null")]
+        if base in _NEGATION_MAP:
+            return [replace(cond, op=prefix + _NEGATION_MAP[base])]
+        raise ValueError(f"Unsupported negation: {node.sql()}")
+
+    raise ValueError(
+        f"Unsupported WHERE/HAVING construct: {node.sql()} — "
+        "V1 supports AND-chains of comparisons, IS [NOT] NULL, and "
+        "aggregate comparisons (no OR / IN / BETWEEN / LIKE)."
+    )
 
 
 def _parse_aggregate(node: exp.Expression) -> tuple[str, Optional[str], Optional[str]]:
@@ -491,78 +529,82 @@ def _parse_aggregate(node: exp.Expression) -> tuple[str, Optional[str], Optional
     agg_type: 'sum' | 'count_star' | 'count_col'
     """
     if isinstance(node, exp.Sum):
-        col = node.find(exp.Column)
-        tbl = col.args.get("table") if col else None
-        return "sum", (col.name if col else None), (tbl.name if tbl else None)
+        arg = node.this
+        if not isinstance(arg, exp.Column):
+            raise ValueError(
+                f"Unsupported aggregate argument: {node.sql()} "
+                "(V1 supports SUM over a single column)."
+            )
+        tbl = arg.args.get("table")
+        return "sum", arg.name, (tbl.name if tbl else None)
 
     if isinstance(node, exp.Count):
         arg = node.this
         if isinstance(arg, exp.Star):
             return "count_star", None, None
-        col = node.find(exp.Column)
-        tbl = col.args.get("table") if col else None
-        return "count_col", (col.name if col else None), (tbl.name if tbl else None)
+        if isinstance(arg, exp.Distinct):
+            raise ValueError("COUNT(DISTINCT ...) is not supported in V1.")
+        if not isinstance(arg, exp.Column):
+            raise ValueError(
+                f"Unsupported aggregate argument: {node.sql()} "
+                "(V1 supports COUNT(*) or COUNT over a single column)."
+            )
+        tbl = arg.args.get("table")
+        return "count_col", arg.name, (tbl.name if tbl else None)
 
-    return "unknown", None, None
+    raise ValueError(f"Unsupported aggregate: {node.sql()}")
 
 
-def _parse_select_expr(node: exp.Expression) -> Optional[ParsedSelectExpr]:
-    """Extract a ParsedSelectExpr from one SELECT list item."""
-    # Bare column: SELECT a.account_id
-    if isinstance(node, exp.Column):
-        tbl = node.args.get("table")
-        return ParsedSelectExpr(
-            alias=node.name,
-            expr_type="column",
-            table_alias=tbl.name if tbl else None,
-            col_name=node.name,
-        )
+def _parse_select_expr(node: exp.Expression) -> ParsedSelectExpr:
+    """Extract a ParsedSelectExpr from one SELECT list item, or raise.
 
-    # Aliased expression: SELECT SUM(t.amount) AS total_spend
+    Fail-closed: skipping an unsupported expression would change the query's
+    output arity/content and could yield a false 'equivalent' verdict.
+    """
+    alias_name: Optional[str] = None
+    inner = node
     if isinstance(node, exp.Alias):
         alias_name = node.alias
         inner = node.this
 
-        # COALESCE(SUM(...), 0) — preserve the default so NULL→default is encoded.
-        coalesce_default = None
-        if isinstance(inner, exp.Coalesce):
-            for arg in inner.find_all(exp.Literal):
-                coalesce_default = _literal_value(arg)
-                break
-            if coalesce_default is None:
-                coalesce_default = 0
-            inner = inner.this  # unwrap to the aggregate inside
+    # Bare column: SELECT a.account_id [AS alias]
+    if isinstance(inner, exp.Column):
+        tbl = inner.args.get("table")
+        return ParsedSelectExpr(
+            alias=alias_name or inner.name,
+            expr_type="column",
+            table_alias=tbl.name if tbl else None,
+            col_name=inner.name,
+        )
 
-        if isinstance(inner, exp.Sum):
-            agg_type, col_name, tbl_alias = _parse_aggregate(inner)
-            return ParsedSelectExpr(
-                alias=alias_name,
-                expr_type="sum",
-                table_alias=tbl_alias,
-                col_name=col_name,
-                coalesce_default=coalesce_default,
+    # COALESCE(SUM(...), default) — preserve the default so NULL→default is encoded.
+    coalesce_default = None
+    if isinstance(inner, exp.Coalesce):
+        rest = inner.expressions
+        if len(rest) != 1:
+            raise ValueError(
+                f"Unsupported COALESCE: {node.sql()} "
+                "(V1 supports COALESCE(aggregate, literal))."
             )
+        coalesce_default = _require_literal(rest[0])
+        inner = inner.this  # unwrap to the aggregate inside
 
-        if isinstance(inner, exp.Count):
-            agg_type, col_name, tbl_alias = _parse_aggregate(inner)
-            return ParsedSelectExpr(
-                alias=alias_name,
-                expr_type=agg_type,   # 'count_star' or 'count_col'
-                table_alias=tbl_alias,
-                col_name=col_name,
-                coalesce_default=coalesce_default,
-            )
+    if isinstance(inner, (exp.Sum, exp.Count)):
+        agg_type, col_name, tbl_alias = _parse_aggregate(inner)
+        return ParsedSelectExpr(
+            alias=alias_name or node.sql(),
+            expr_type=agg_type,
+            table_alias=tbl_alias,
+            col_name=col_name,
+            coalesce_default=coalesce_default,
+        )
 
-        if isinstance(inner, exp.Column):
-            tbl = inner.args.get("table")
-            return ParsedSelectExpr(
-                alias=alias_name,
-                expr_type="column",
-                table_alias=tbl.name if tbl else None,
-                col_name=inner.name,
-            )
-
-    return None  # unsupported expression — skipped
+    raise ValueError(
+        f"Unsupported SELECT expression: {node.sql()} — "
+        "V1 supports plain columns, SUM(col), COUNT(*), COUNT(col), "
+        "and COALESCE(aggregate, literal). SELECT * is not supported; "
+        "list columns explicitly."
+    )
 
 
 def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
@@ -588,14 +630,36 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
     if not isinstance(stmt, exp.Select):
         raise ValueError("Only SELECT queries are supported.")
 
+    def arg(name: str):
+        # sqlglot 30.x renamed reserved-word arg keys ('from' → 'from_', etc.)
+        return stmt.args.get(name) or stmt.args.get(name + "_")
+
+    # ── Whole-query constructs outside the V1 subset ─────────────────────────
+    if arg("with"):
+        raise ValueError("CTEs (WITH ...) are not supported in V1.")
+    if arg("distinct"):
+        raise ValueError("SELECT DISTINCT is not supported in V1.")
+    if arg("limit"):
+        raise ValueError("LIMIT is not supported in V1.")
+    if arg("offset"):
+        raise ValueError("OFFSET is not supported in V1.")
+    if stmt.find(exp.Window):
+        raise ValueError("Window functions are not supported in V1.")
+    if any(s is not stmt for s in stmt.find_all(exp.Select)):
+        raise ValueError("Subqueries are not supported in V1.")
+    # ORDER BY is ignored: equivalence is checked under bag semantics.
+
     # ── FROM table ───────────────────────────────────────────────────────────
-    from_clause = stmt.find(exp.From)
+    from_clause = arg("from")
     if from_clause is None:
         raise ValueError("Query has no FROM clause.")
 
-    from_table_node = from_clause.find(exp.Table)
-    if from_table_node is None:
-        raise ValueError("Could not identify FROM table.")
+    from_table_node = from_clause.this
+    if not isinstance(from_table_node, exp.Table):
+        raise ValueError(
+            "FROM must reference a plain table (derived tables / subqueries "
+            "are not supported in V1)."
+        )
 
     from_table = from_table_node.name
     from_alias = from_table_node.alias or from_table
@@ -603,21 +667,27 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
     # ── JOINs (V1: max one join) ─────────────────────────────────────────────
     joins: list[ParsedJoin] = []
     for join_node in stmt.find_all(exp.Join):
-        tbl = join_node.find(exp.Table)
-        if tbl is None:
-            continue
+        tbl = join_node.this
+        if not isinstance(tbl, exp.Table):
+            raise ValueError("JOIN must reference a plain table in V1.")
 
-        kind = join_node.args.get("kind")   # 'INNER' string or None
-        side = join_node.args.get("side")   # 'LEFT' string or None
+        kind = join_node.args.get("kind")   # 'INNER' / 'CROSS' string or None
+        side = join_node.args.get("side")   # 'LEFT' / 'RIGHT' / 'FULL' or None
 
         if side == "LEFT":
             join_type = "LEFT"
         elif side == "RIGHT":
-            join_type = "RIGHT" 
+            join_type = "RIGHT"
+        elif side == "FULL":
+            raise ValueError("FULL OUTER JOIN is not supported in V1.")
+        elif kind == "CROSS":
+            raise ValueError("CROSS JOIN is not supported in V1.")
         else:
             join_type = "INNER"   # default: INNER
 
         on = join_node.args.get("on")
+        while isinstance(on, exp.Paren):
+            on = on.this
         if on is None or not isinstance(on, exp.EQ):
             raise ValueError(
                 f"JOIN ON clause must be a simple equality condition. Got: {on}"
@@ -634,41 +704,52 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
             table_name=tbl.name,
             alias=tbl.alias or tbl.name,
             join_type=join_type,
-            on_left_alias=left_tbl.name if left_tbl else from_alias,
+            on_left_alias=left_tbl.name if left_tbl else None,
             on_left_col=left_col.name,
-            on_right_alias=right_tbl.name if right_tbl else (tbl.alias or tbl.name),
+            on_right_alias=right_tbl.name if right_tbl else None,
             on_right_col=right_col.name,
         ))
 
-    # ── SELECT expressions ───────────────────────────────────────────────────
-    select_exprs: list[ParsedSelectExpr] = []
-    for sel in stmt.expressions:
-        parsed_sel = _parse_select_expr(sel)
-        if parsed_sel is not None:
-            select_exprs.append(parsed_sel)
+    if len(joins) > 1:
+        raise ValueError("V1 supports at most one JOIN per query.")
 
+    # ── SELECT expressions ───────────────────────────────────────────────────
+    select_exprs = [_parse_select_expr(sel) for sel in stmt.expressions]
     if not select_exprs:
-        raise ValueError("No supported SELECT expressions found.")
+        raise ValueError("No SELECT expressions found.")
 
     # ── GROUP BY ─────────────────────────────────────────────────────────────
-    group_by: list[tuple[str, str]] = []
-    group_node = stmt.args.get("group")
+    group_by: list[tuple[Optional[str], str]] = []
+    group_node = arg("group")
     if group_node:
-        for col in group_node.find_all(exp.Column):
-            tbl = col.args.get("table")
-            group_by.append((tbl.name if tbl else from_alias, col.name))
+        for g_expr in group_node.expressions:
+            if not isinstance(g_expr, exp.Column):
+                raise ValueError(
+                    f"Unsupported GROUP BY expression: {g_expr.sql()} "
+                    "(V1 supports plain columns only)."
+                )
+            tbl = g_expr.args.get("table")
+            group_by.append((tbl.name if tbl else None, g_expr.name))
 
     # ── WHERE ────────────────────────────────────────────────────────────────
     where_conditions: list[ParsedCondition] = []
-    where_node = stmt.args.get("where")
+    where_node = arg("where")
     if where_node:
         where_conditions = _parse_conditions(where_node.this)
+        if any(c.op.startswith("having_") for c in where_conditions):
+            raise ValueError("Aggregate comparisons belong in HAVING, not WHERE.")
 
     # ── HAVING ───────────────────────────────────────────────────────────────
     having_conditions: list[ParsedCondition] = []
-    having_node = stmt.args.get("having")
+    having_node = arg("having")
     if having_node:
         having_conditions = _parse_conditions(having_node.this)
+        for cond in having_conditions:
+            if cond.agg_type is None:
+                raise ValueError(
+                    "V1 supports only aggregate comparisons in HAVING "
+                    "(e.g. HAVING COUNT(*) > 1)."
+                )
 
     return ParsedQuery(
         from_table=from_table,
@@ -679,6 +760,67 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
         where_conditions=where_conditions,
         having_conditions=having_conditions,
     )
+
+
+# ── Alias / column resolution ────────────────────────────────────────────────
+
+def _resolve_column(
+    alias: Optional[str],
+    col: str,
+    alias_map: dict[str, str],
+    db: SymbolicDB,
+    ctx: str,
+) -> str:
+    """Resolve (alias, column) to a definite table alias, fail-closed.
+
+    Unqualified columns are looked up across every table in the query; an
+    unknown or ambiguous column raises instead of being silently attributed
+    to the FROM table (the old behaviour, which dropped predicates on
+    unqualified join-table columns).
+    """
+    if alias is not None:
+        tname = alias_map.get(alias)
+        if tname is None:
+            raise ValueError(f"Unknown table alias '{alias}' in {ctx}.")
+        if col not in db.vars[tname]:
+            raise ValueError(f"Column '{col}' does not exist in table '{tname}' ({ctx}).")
+        return alias
+    hits = [a for a, t in alias_map.items() if col in db.vars[t]]
+    if not hits:
+        raise ValueError(f"Column '{col}' not found in any table referenced by the query ({ctx}).")
+    if len(hits) > 1:
+        raise ValueError(f"Column '{col}' is ambiguous in {ctx}; qualify it with a table alias.")
+    return hits[0]
+
+
+def _resolve_references(parsed: ParsedQuery, alias_map: dict[str, str], db: SymbolicDB) -> None:
+    """Resolve and validate every column reference in the query, in place."""
+    for join in parsed.joins:
+        join.on_left_alias = _resolve_column(
+            join.on_left_alias, join.on_left_col, alias_map, db, "JOIN ON")
+        join.on_right_alias = _resolve_column(
+            join.on_right_alias, join.on_right_col, alias_map, db, "JOIN ON")
+
+    for sel in parsed.select_exprs:
+        if sel.col_name is not None:   # column / sum / count_col
+            sel.table_alias = _resolve_column(
+                sel.table_alias, sel.col_name, alias_map, db, "SELECT")
+
+    parsed.group_by = [
+        (_resolve_column(a, c, alias_map, db, "GROUP BY"), c)
+        for (a, c) in parsed.group_by
+    ]
+
+    for cond in parsed.where_conditions + parsed.having_conditions:
+        if cond.col is not None:
+            cond.table_alias = _resolve_column(
+                cond.table_alias, cond.col, alias_map, db, "WHERE/HAVING")
+        if cond.rhs_col is not None:
+            cond.rhs_table_alias = _resolve_column(
+                cond.rhs_table_alias, cond.rhs_col, alias_map, db, "WHERE/HAVING")
+        if cond.agg_col is not None:
+            cond.agg_table_alias = _resolve_column(
+                cond.agg_table_alias, cond.agg_col, alias_map, db, "HAVING")
 
 
 # ── Z3 encoder ───────────────────────────────────────────────────────────────
@@ -704,6 +846,13 @@ def encode_query(
     merges rows with equal keys, and the result is a bounded list of tuples
     whose multiplicities are compared for bag-equivalence in equivalence.py.
 
+    JOIN semantics: the ON condition and the WHERE clause are kept strictly
+    separate. For outer joins the distinction is load-bearing — a filter in
+    WHERE eliminates null-extended rows (making LEFT JOIN behave like INNER),
+    while the same filter in ON merely restricts which rows match. Folding
+    WHERE into the join match (the old behaviour) got this wrong in both
+    directions.
+
     Args:
         parsed:  Output of parse_query().
         db:      Shared SymbolicDB — must be the SAME instance for both queries
@@ -712,15 +861,22 @@ def encode_query(
     """
     bound = db.bound
 
-    # ── Alias → real table name resolution ───────────────────────────────────
+    # ── Alias → real table name resolution & fail-closed validation ──────────
     alias_map: dict[str, str] = {parsed.from_alias: parsed.from_table}
     for join in parsed.joins:
         alias_map[join.alias] = join.table_name
 
+    for tname in alias_map.values():
+        if tname not in db.vars:
+            raise ValueError(f"Table '{tname}' not found in the schema.")
+
+    _resolve_references(parsed, alias_map, db)
+
     def resolve(alias: str) -> str:
-        return alias_map.get(alias, alias)
+        return alias_map[alias]
 
     from_alias = parsed.from_alias
+    from_tname = parsed.from_table
     has_join = bool(parsed.joins)
     join = parsed.joins[0] if has_join else None
     join_alias = join.alias if has_join else None
@@ -728,110 +884,107 @@ def encode_query(
     is_left = has_join and join.join_type == "LEFT"
     is_right = has_join and join.join_type == "RIGHT"
 
-    def cell(alias: str, col: str, i: int) -> tuple:
-        return db.cell(resolve(alias), col, i)
+    if has_join and join_tname == from_tname:
+        raise ValueError("Self-joins are not supported in V1.")
 
-    def row_exists(alias: str, i: int) -> BoolRef:
-        return db.exists[resolve(alias)][i]
-
-    # A predicate "touches" the join table when either side references it. Such
-    # predicates need both row indices (i, j) and so are evaluated in the join
-    # context (where_right); everything else stays on the FROM-table side.
-    def refs_join(cond: ParsedCondition) -> bool:
-        if not has_join:
-            return False
-        return cond.table_alias == join_alias or cond.rhs_table_alias == join_alias
-
-    # ── WHERE filters (three-valued: keep a row only when the predicate is TRUE)
-    def where_left(i: int) -> BoolRef:
-        clauses = []
-        for cond in parsed.where_conditions:
-            if refs_join(cond):
-                continue  # handled in the join context (where_right)
-            if cond.table_alias not in (from_alias, None):
-                continue
-            c = _pred_true(cond, alias_map, db, i, None, schema)
-            if c is not None:
-                clauses.append(c)
-        return And(clauses) if clauses else BoolVal(True)
-
-    def where_right(i: int, j: int) -> BoolRef:
-        if not has_join:
-            return BoolVal(True)
-        clauses = []
-        for cond in parsed.where_conditions:
-            if not refs_join(cond):
-                continue
-            c = _pred_true(cond, alias_map, db, i, j, schema)
-            if c is not None:
-                clauses.append(c)
-        return And(clauses) if clauses else BoolVal(True)
-
-    # ── JOIN match (three-valued ON equality: both keys non-NULL and equal) ──
-    def join_match(i: int, j: int) -> BoolRef:
-        ln, lv = cell(join.on_left_alias, join.on_left_col, i)
-        rn, rv = cell(join.on_right_alias, join.on_right_col, j)
-        return And(row_exists(join_alias, j), Not(ln), Not(rn), lv == rv,
-                   where_right(i, j))
-
-    def has_match_left(i: int) -> BoolRef:
-        return Or([join_match(i, j) for j in range(bound)]) if has_join else BoolVal(True)
-    
-    def has_match_right(j: int) -> BoolRef:
-        return Or([And(qualifies(i), join_match(i, j)) for i in range(bound)]) if has_join else BoolVal(True)
-
-    def qualifies(i: int) -> BoolRef:
-        return And(row_exists(from_alias, i), where_left(i))
-
-    # ── Cell-accessor closures for aggregate contributions ───────────────────
-    def cellfn_pair(i: int, j: int):
-        def f(alias, col):
-            t = resolve(alias or from_alias)
-            idx = j if (has_join and t == join_tname) else i
-            return db.cell(t, col, idx)
-        return f
-
+    # ── Cell accessors: map (alias, col) → (is_null, value) per row context ──
     def cellfn_single(i: int):
         def f(alias, col):
-            return db.cell(resolve(alias or from_alias), col, i)
+            return db.cell(resolve(alias), col, i)
+        return f
+
+    def cellfn_pair(i: int, j: int):
+        def f(alias, col):
+            t = resolve(alias)
+            return db.cell(t, col, j if t == join_tname else i)
         return f
 
     def cellfn_nullext_left(i: int):
         def f(alias, col):
-            t = resolve(alias or from_alias)
-            if has_join and t == join_tname:
+            t = resolve(alias)
+            if t == join_tname:
                 return (BoolVal(True), IntVal(0))  # right side is NULL-extended
             return db.cell(t, col, i)
         return f
-    
+
     def cellfn_nullext_right(j: int):
         def f(alias, col):
-            t = resolve(alias or from_alias)
-            if has_join and t != join_tname:  # FROM (left) side is NULL-extended
+            t = resolve(alias)
+            if t != join_tname:  # FROM (left) side is NULL-extended
                 return (BoolVal(True), IntVal(0))
             return db.cell(t, col, j)
         return f
 
-    # ── Projection of one SELECT column to a SymValue ────────────────────────
-    def proj_col(sel: ParsedSelectExpr, i: Optional[int], j: Optional[int],
-                 null_ext: bool = False, null_ext_right: bool = False) -> SymValue:
-        t = resolve(sel.table_alias or from_alias)
-        if has_join and t == join_tname:
-            if null_ext:
-                return SymValue(BoolVal(True), IntVal(0))
-            n, v = db.cell(t, sel.col_name, j)
-            return SymValue(n, v)
-        if null_ext_right:
-            return SymValue(BoolVal(True), IntVal(0))
-        n, v = db.cell(t, sel.col_name, i)
+    # ── WHERE: evaluated on the post-join tuple (three-valued: TRUE keeps) ───
+    def where_all(cellfn) -> BoolRef:
+        clauses = [
+            _pred_true(cond, alias_map, db, schema, cellfn)
+            for cond in parsed.where_conditions
+        ]
+        return And(clauses) if clauses else BoolVal(True)
+
+    # ── ON condition only (three-valued equality); WHERE applies after ───────
+    def on_match(i: int, j: int) -> BoolRef:
+        cf = cellfn_pair(i, j)
+        ln, lv = cf(join.on_left_alias, join.on_left_col)
+        rn, rv = cf(join.on_right_alias, join.on_right_col)
+        return And(db.exists[join_tname][j], Not(ln), Not(rn), lv == rv)
+
+    # ── Memoised row/pair survival predicates ────────────────────────────────
+    _pair_cache: dict[tuple[int, int], BoolRef] = {}
+    _nl_cache: dict[int, BoolRef] = {}
+    _nr_cache: dict[int, BoolRef] = {}
+    _single_cache: dict[int, BoolRef] = {}
+
+    def pair_present(i: int, j: int) -> BoolRef:
+        """Matched pair (i, j) survives: both rows exist, ON holds, WHERE holds."""
+        if (i, j) not in _pair_cache:
+            _pair_cache[(i, j)] = And(
+                db.exists[from_tname][i], on_match(i, j), where_all(cellfn_pair(i, j)))
+        return _pair_cache[(i, j)]
+
+    def has_match_left(i: int) -> BoolRef:
+        return Or([on_match(i, j) for j in range(bound)])
+
+    def has_match_right(j: int) -> BoolRef:
+        return Or([And(db.exists[from_tname][i], on_match(i, j)) for i in range(bound)])
+
+    def nullext_left_present(i: int) -> BoolRef:
+        """LEFT-join null-extended row for unmatched FROM row i. WHERE is
+        evaluated with the join side NULL — so WHERE r.x = 5 kills the row
+        (LEFT≡INNER) while WHERE r.x IS NULL keeps it (anti-join)."""
+        if i not in _nl_cache:
+            _nl_cache[i] = And(
+                db.exists[from_tname][i], Not(has_match_left(i)),
+                where_all(cellfn_nullext_left(i)))
+        return _nl_cache[i]
+
+    def nullext_right_present(j: int) -> BoolRef:
+        """RIGHT-join null-extended row for unmatched join row j (no existing
+        FROM row matches the ON condition; WHERE plays no part in matching)."""
+        if j not in _nr_cache:
+            _nr_cache[j] = And(
+                db.exists[join_tname][j], Not(has_match_right(j)),
+                where_all(cellfn_nullext_right(j)))
+        return _nr_cache[j]
+
+    def single_present(i: int) -> BoolRef:
+        if i not in _single_cache:
+            _single_cache[i] = And(db.exists[from_tname][i], where_all(cellfn_single(i)))
+        return _single_cache[i]
+
+    # ── Projection of one SELECT column through a cell accessor ──────────────
+    def proj(sel: ParsedSelectExpr, cellfn) -> SymValue:
+        n, v = cellfn(sel.table_alias, sel.col_name)
         return SymValue(n, v)
 
     # ── Aggregate over a list of contributions (active_bool, cell_fn) ────────
     def agg_value(sel: ParsedSelectExpr, contribs: list) -> SymValue:
-        t = resolve(sel.table_alias or from_alias)
-        col_obj = (schema.get_table(t).get_column(sel.col_name)
-                   if (sel.col_name and schema.get_table(t)) else None)
-        is_real = bool(col_obj and col_obj.col_type == "REAL")
+        is_real = False
+        if sel.col_name is not None:
+            t = resolve(sel.table_alias)
+            col_obj = schema.get_table(t).get_column(sel.col_name) if schema.get_table(t) else None
+            is_real = bool(col_obj and col_obj.col_type == "REAL")
         zero = RealVal(0) if is_real else IntVal(0)
 
         def coalesce(sv: SymValue) -> SymValue:
@@ -839,6 +992,7 @@ def encode_query(
             if sel.coalesce_default is None:
                 return sv
             d = sel.coalesce_default
+            db.note_numeric_literal(d)
             dlit = RealVal(float(d)) if is_real else IntVal(int(d))
             return SymValue(BoolVal(False), If(sv.is_null, dlit, sv.value))
 
@@ -848,7 +1002,7 @@ def encode_query(
             return coalesce(SymValue(BoolVal(False), total))
 
         if sel.expr_type == "count_col":
-            # COUNT(col) ignores NULLs (now modelled explicitly).
+            # COUNT(col) ignores NULLs (modelled explicitly).
             terms = []
             for a, cf in contribs:
                 n, _ = cf(sel.table_alias, sel.col_name)
@@ -867,7 +1021,28 @@ def encode_query(
             null_flag = Not(Or(live_terms)) if live_terms else BoolVal(True)
             return coalesce(SymValue(null_flag, total))
 
-        return SymValue(BoolVal(True), zero)  # unreachable for known agg types
+        raise ValueError(f"Unsupported aggregate type: {sel.expr_type}")
+
+    def having_clauses(contribs: list) -> list[BoolRef]:
+        """HAVING aggregates are computed fresh from the group's contributions
+        rather than matched to SELECT aliases — a HAVING aggregate need not
+        appear in the SELECT list, and matching by alias would wrongly reuse a
+        COALESCEd value."""
+        clauses = []
+        for cond in parsed.having_conditions:
+            if isinstance(cond.value, (int, float)):
+                db.note_numeric_literal(cond.value)
+            synth = ParsedSelectExpr(
+                alias="_having",
+                expr_type=cond.agg_type,
+                table_alias=cond.agg_table_alias,
+                col_name=cond.agg_col,
+            )
+            hc = _having_pred(cond, agg_value(synth, contribs))
+            if hc is None:
+                raise ValueError("Unsupported HAVING condition.")
+            clauses.append(hc)
+        return clauses
 
     col_aliases = [sel.alias for sel in parsed.select_exprs]
     arity = len(col_aliases)
@@ -877,144 +1052,148 @@ def encode_query(
     extra_constraints: list = []
     output: list[OutputTuple] = []
 
-    def _having_present(base: BoolRef, col_by_alias: dict) -> BoolRef:
-        clauses = []
-        for cond in parsed.having_conditions:
-            alias = _match_having_alias(cond, parsed.select_exprs)
-            sv = col_by_alias.get(alias)
-            if sv is None:
-                continue
-            hc = _having_pred(cond, sv)
-            if hc is not None:
-                clauses.append(hc)
-        return And([base, *clauses]) if clauses else base
-
     if has_group:
         # ── GROUP BY: one output tuple per distinct key (Dedup + Eval). ──────
+        # V1 restriction: group keys (and bare SELECT columns) must come from
+        # the FROM table — the dedup machinery indexes groups by FROM rows.
+        for (galias, gcol) in parsed.group_by:
+            if resolve(galias) != from_tname:
+                raise ValueError(
+                    "V1 supports GROUP BY only on columns of the FROM table; "
+                    f"'{galias}.{gcol}' belongs to the joined table. "
+                    "Swap the join direction to group by that table's columns."
+                )
+        for sel in parsed.select_exprs:
+            if sel.expr_type == "column" and resolve(sel.table_alias) != from_tname:
+                raise ValueError(
+                    "Non-aggregated SELECT columns in a GROUP BY query must "
+                    "come from the FROM table in V1."
+                )
+        if is_right:
+            # Null-extended right rows have NULL FROM-side keys and form one
+            # extra group. If a key column were nullable, matched rows could
+            # also carry NULL keys and would have to merge with that group —
+            # not modelled, so reject rather than risk a wrong verdict.
+            from_table_obj = schema.get_table(from_tname)
+            for (_, gcol) in parsed.group_by:
+                col_obj = from_table_obj.get_column(gcol) if from_table_obj else None
+                if col_obj is None or col_obj.nullable:
+                    raise ValueError(
+                        "RIGHT JOIN with GROUP BY requires non-nullable "
+                        f"group key columns in V1 ('{gcol}' is nullable)."
+                    )
+
         def group_key_eq(i: int, g: int) -> BoolRef:
             clauses = []
             for (galias, gcol) in parsed.group_by:
-                n1, v1 = cell(galias, gcol, i)
-                n2, v2 = cell(galias, gcol, g)
+                n1, v1 = db.cell(from_tname, gcol, i)
+                n2, v2 = db.cell(from_tname, gcol, g)
                 # NULLs group together (SQL groups NULL keys into one group).
                 clauses.append(Or(And(n1, n2),
                                   And(Not(n1), Not(n2), v1 == v2)))
             return And(clauses) if clauses else BoolVal(True)
 
+        def alive(i: int) -> BoolRef:
+            """FROM row i contributes at least one surviving post-WHERE row."""
+            if has_join:
+                terms = [pair_present(i, j) for j in range(bound)]
+                if is_left:
+                    terms.append(nullext_left_present(i))
+                return Or(terms)
+            return single_present(i)
+
         for g in range(bound):
-            # Row g is the leader of its group iff it qualifies and no earlier
-            # qualifying row shares its key.
-            earlier = [Not(And(qualifies(h), group_key_eq(h, g))) for h in range(g)]
-            leader = And(qualifies(g), *earlier) if earlier else qualifies(g)
+            # Row g leads its group iff it is alive and no earlier alive row
+            # shares its key. "Alive" already implies the group is non-empty.
+            earlier = [Not(And(alive(h), group_key_eq(h, g))) for h in range(g)]
+            base_present = And(alive(g), *earlier) if earlier else alive(g)
 
             contribs = []
             for i in range(bound):
-                member = And(qualifies(i), group_key_eq(i, g))
+                keq = group_key_eq(i, g)
                 if has_join:
                     for j in range(bound):
-                        contribs.append((And(member, join_match(i, j)), cellfn_pair(i, j)))
+                        contribs.append((And(keq, pair_present(i, j)), cellfn_pair(i, j)))
                     if is_left:
-                        contribs.append((And(member, Not(has_match_left(i))), cellfn_nullext_left(i)))
+                        contribs.append((And(keq, nullext_left_present(i)), cellfn_nullext_left(i)))
                 else:
-                    contribs.append((member, cellfn_single(i)))
-
-            # A group only appears if it actually has rows. For an INNER join
-            # that means at least one match; for a LEFT join the null-extended
-            # contribution keeps the group alive, and a join-free group always
-            # contains its own leader row.
-            nonempty = Or([a for a, _ in contribs]) if contribs else BoolVal(False)
-            base_present = And(leader, nonempty)
+                    contribs.append((And(keq, single_present(i)), cellfn_single(i)))
 
             cols = []
             for sel in parsed.select_exprs:
                 if sel.expr_type == "column":
-                    cols.append(proj_col(sel, g, None))      # group-key value
+                    n, v = db.cell(from_tname, sel.col_name, g)   # group-key value
+                    cols.append(SymValue(n, v))
                 else:
                     cols.append(agg_value(sel, contribs))
-            col_by_alias = {parsed.select_exprs[k].alias: cols[k] for k in range(arity)}
-            output.append(OutputTuple(_having_present(base_present, col_by_alias), cols))
+            present = And([base_present, *having_clauses(contribs)]) \
+                if parsed.having_conditions else base_present
+            output.append(OutputTuple(present, cols))
 
         if is_right:
-            def _right_nullext_cell(alias: str, col: str, row_idx: int) -> tuple:
-                t = resolve(alias)
-                if t != join_tname:
-                    return (BoolVal(True), IntVal(0))
-                return db.cell(t, col, row_idx)
+            # All null-extended right rows share the single all-NULL FROM-side
+            # key, so they form exactly one extra candidate group.
+            contribs_r = [(nullext_right_present(j), cellfn_nullext_right(j))
+                          for j in range(bound)]
+            base_present_r = Or([a for a, _ in contribs_r]) if contribs_r else BoolVal(False)
 
-            def group_key_eq_right(j1: int, j2: int) -> BoolRef:
-                clauses = []
-                for (galias, gcol) in parsed.group_by:
-                    n1, v1 = _right_nullext_cell(galias, gcol, j1)
-                    n2, v2 = _right_nullext_cell(galias, gcol, j2)
-                    clauses.append(Or(And(n1, n2), And(Not(n1), Not(n2), v1 == v2)))
-                return And(clauses) if clauses else BoolVal(True)
-
-            def qualifies_right(j: int) -> BoolRef:
-                return And(row_exists(join_alias, j), Not(has_match_right(j)))
-
-            for g in range(bound):
-                earlier_r = [Not(And(qualifies_right(h), group_key_eq_right(h, g))) for h in range(g)]
-                leader_r = And(qualifies_right(g), *earlier_r) if earlier_r else qualifies_right(g)
-
-                contribs_r = []
-                for j in range(bound):
-                    member_r = And(qualifies_right(j), group_key_eq_right(j, g))
-                    contribs_r.append((member_r, cellfn_nullext_right(j)))
-
-                nonempty_r = Or([a for a, _ in contribs_r]) if contribs_r else BoolVal(False)
-                base_present_r = And(leader_r, nonempty_r)
-
-                cols_r = []
-                for sel in parsed.select_exprs:
-                    if sel.expr_type == "column":
-                        cols_r.append(proj_col(sel, None, g, null_ext_right=True))
-                    else:
-                        cols_r.append(agg_value(sel, contribs_r))
-                col_by_alias_r = {parsed.select_exprs[k].alias: cols_r[k] for k in range(arity)}
-                output.append(OutputTuple(_having_present(base_present_r, col_by_alias_r), cols_r))
+            cols_r = []
+            for sel in parsed.select_exprs:
+                if sel.expr_type == "column":
+                    cols_r.append(SymValue(BoolVal(True), IntVal(0)))  # NULL key
+                else:
+                    cols_r.append(agg_value(sel, contribs_r))
+            present_r = And([base_present_r, *having_clauses(contribs_r)]) \
+                if parsed.having_conditions else base_present_r
+            output.append(OutputTuple(present_r, cols_r))
 
     elif has_agg:
         # ── Aggregate without GROUP BY: exactly one output row. ──────────────
+        for sel in parsed.select_exprs:
+            if sel.expr_type == "column":
+                raise ValueError(
+                    f"Bare column '{sel.alias}' mixed with aggregates "
+                    "requires GROUP BY."
+                )
+
         contribs = []
         for i in range(bound):
             if has_join:
                 for j in range(bound):
-                    contribs.append((And(qualifies(i), join_match(i, j)), cellfn_pair(i, j)))
+                    contribs.append((pair_present(i, j), cellfn_pair(i, j)))
                 if is_left:
-                    contribs.append((And(qualifies(i), Not(has_match_left(i))), cellfn_nullext_left(i)))
+                    contribs.append((nullext_left_present(i), cellfn_nullext_left(i)))
             else:
-                contribs.append((qualifies(i), cellfn_single(i)))
+                contribs.append((single_present(i), cellfn_single(i)))
         if is_right:
             for j in range(bound):
-                contribs.append((And(row_exists(join_alias, j), Not(has_match_right(j))), cellfn_nullext_right(j)))
+                contribs.append((nullext_right_present(j), cellfn_nullext_right(j)))
 
-        cols = []
-        for sel in parsed.select_exprs:
-            if sel.expr_type == "column":
-                cols.append(proj_col(sel, 0, 0))  # best-effort; bare col w/o GROUP BY
-            else:
-                cols.append(agg_value(sel, contribs))
-        col_by_alias = {parsed.select_exprs[k].alias: cols[k] for k in range(arity)}
+        cols = [agg_value(sel, contribs) for sel in parsed.select_exprs]
         # An ungrouped aggregate always returns one row; HAVING may drop it.
-        output.append(OutputTuple(_having_present(BoolVal(True), col_by_alias), cols))
+        present = And(having_clauses(contribs)) \
+            if parsed.having_conditions else BoolVal(True)
+        output.append(OutputTuple(present, cols))
 
     else:
-        # ── Plain projection: one tuple per qualifying row / matching pair. ──
+        # ── Plain projection: one tuple per surviving row / matching pair. ───
+        if parsed.having_conditions:
+            raise ValueError("HAVING without GROUP BY or aggregates is not supported.")
         for i in range(bound):
             if not has_join:
-                cols = [proj_col(sel, i, None) for sel in parsed.select_exprs]
-                output.append(OutputTuple(qualifies(i), cols))
+                cols = [proj(sel, cellfn_single(i)) for sel in parsed.select_exprs]
+                output.append(OutputTuple(single_present(i), cols))
                 continue
             for j in range(bound):
-                cols = [proj_col(sel, i, j) for sel in parsed.select_exprs]
-                output.append(OutputTuple(And(qualifies(i), join_match(i, j)), cols))
+                cols = [proj(sel, cellfn_pair(i, j)) for sel in parsed.select_exprs]
+                output.append(OutputTuple(pair_present(i, j), cols))
             if is_left:
-                cols = [proj_col(sel, i, None, null_ext=True) for sel in parsed.select_exprs]
-                output.append(OutputTuple(And(qualifies(i), Not(has_match_left(i))), cols))
+                cols = [proj(sel, cellfn_nullext_left(i)) for sel in parsed.select_exprs]
+                output.append(OutputTuple(nullext_left_present(i), cols))
         if is_right:
             for j in range(bound):
-                cols = [proj_col(sel, None, j, null_ext_right=True) for sel in parsed.select_exprs]
-                output.append(OutputTuple(And(row_exists(join_alias, j), Not(has_match_right(j))), cols))
+                cols = [proj(sel, cellfn_nullext_right(j)) for sel in parsed.select_exprs]
+                output.append(OutputTuple(nullext_right_present(j), cols))
 
     return QueryFormula(
         output=output,
@@ -1031,37 +1210,19 @@ def _pred_true(
     cond: ParsedCondition,
     alias_map: dict[str, str],
     db: SymbolicDB,
-    left_row: int,
-    right_row: Optional[int],
     schema: SchemaModel,
-) -> Optional[BoolRef]:
+    cellfn,
+) -> BoolRef:
     """
     Encode a predicate under three-valued logic and return a Z3 Bool that is
     TRUE iff the predicate evaluates to TRUE (a filter keeps a row only then;
-    NULL and FALSE both fail). Returns None when the predicate can't be encoded.
+    NULL and FALSE both fail). Cells are read through `cellfn(alias, col)` so
+    the same predicate works in matched-pair and null-extended row contexts.
+
+    Raises ValueError on anything that cannot be encoded — never drops a
+    predicate silently.
     """
-    table_names = list(alias_map.values())
-    from_tname = table_names[0]
-
-    def resolve(alias: Optional[str]) -> Optional[tuple[str, int]]:
-        """Resolve an aliased column to (table_name, row_index), picking the row
-        index the same way the join-match code does: the right-hand (j) row for
-        the joined table, the left-hand (i) row for the FROM table."""
-        tn = from_tname if alias is None else alias_map.get(alias, alias)
-        if tn not in db.vars:
-            return None
-        idx = right_row if (right_row is not None and tn != from_tname) else left_row
-        return tn, idx
-
-    resolved = resolve(cond.table_alias)
-    if resolved is None:
-        return None
-    tname, row_idx = resolved
-
-    if cond.col not in db.vars.get(tname, {}):
-        return None  # unknown column — skip silently
-
-    is_null, val = db.cell(tname, cond.col, row_idx)
+    is_null, val = cellfn(cond.table_alias, cond.col)
 
     # NULL checks are the only predicates that can yield TRUE on a NULL value.
     if cond.op == "is_null":
@@ -1070,18 +1231,9 @@ def _pred_true(
         return Not(is_null)
 
     # ── Column-vs-column predicate (e.g. WHERE b = a) ────────────────────────
-    # Under three-valued logic the comparison is TRUE only when both cells are
-    # non-NULL and the underlying values relate as the operator requires. The
-    # previous code returned None here (cond.value is None), silently dropping
-    # the filter and making the encoded query unsoundly broad.
+    # TRUE only when both cells are non-NULL and the values relate as required.
     if cond.rhs_col is not None:
-        rhs_resolved = resolve(cond.rhs_table_alias)
-        if rhs_resolved is None:
-            return None
-        rhs_tname, rhs_row_idx = rhs_resolved
-        if cond.rhs_col not in db.vars.get(rhs_tname, {}):
-            return None
-        r_is_null, r_val = db.cell(rhs_tname, cond.rhs_col, rhs_row_idx)
+        r_is_null, r_val = cellfn(cond.rhs_table_alias, cond.rhs_col)
         both_nn = And(Not(is_null), Not(r_is_null))
         if cond.op == "eq":  return And(both_nn, val == r_val)
         if cond.op == "neq": return And(both_nn, val != r_val)
@@ -1089,23 +1241,38 @@ def _pred_true(
         if cond.op == "gte": return And(both_nn, val >= r_val)
         if cond.op == "lt":  return And(both_nn, val < r_val)
         if cond.op == "lte": return And(both_nn, val <= r_val)
-        return None
+        raise ValueError(f"Unsupported column comparison operator '{cond.op}'.")
 
     if cond.value is None:
-        return None
+        raise ValueError(f"Unsupported predicate on column '{cond.col}'.")
 
+    tname = alias_map[cond.table_alias]
     table_obj = schema.get_table(tname)
     col_obj = table_obj.get_column(cond.col) if table_obj else None
     col_type = col_obj.col_type if col_obj else "INTEGER"
 
-    def lit(v):
-        if isinstance(v, str):
-            return IntVal(db.intern_string(tname, cond.col, v))
-        if col_type == "REAL":
-            return RealVal(float(v))
-        return IntVal(int(v))
+    if isinstance(cond.value, str):
+        if col_type not in ("TEXT", "TIMESTAMP"):
+            raise ValueError(
+                f"String literal compared to non-text column '{cond.col}' "
+                f"({col_type}) is not supported."
+            )
+        if cond.op not in ("eq", "neq"):
+            raise ValueError(
+                f"Ordering comparison on TEXT/TIMESTAMP column '{cond.col}' is "
+                "not supported in V1 — string/timestamp values are encoded "
+                "symbolically (equality only)."
+            )
+        rhs = IntVal(db.intern_string(cond.value))
+    else:
+        if col_type in ("TEXT", "TIMESTAMP"):
+            raise ValueError(
+                f"Numeric literal compared to TEXT/TIMESTAMP column "
+                f"'{cond.col}' is not supported."
+            )
+        db.note_numeric_literal(cond.value)
+        rhs = RealVal(float(cond.value)) if col_type == "REAL" else IntVal(int(cond.value))
 
-    rhs = lit(cond.value)
     notnull = Not(is_null)   # comparisons against a NULL operand are never TRUE
 
     if cond.op == "eq":  return And(notnull, val == rhs)
@@ -1115,29 +1282,7 @@ def _pred_true(
     if cond.op == "lt":  return And(notnull, val < rhs)
     if cond.op == "lte": return And(notnull, val <= rhs)
 
-    return None
-
-
-def _match_having_alias(
-    cond: ParsedCondition,
-    select_exprs: list[ParsedSelectExpr],
-) -> Optional[str]:
-    """
-    Resolve a HAVING condition to the SELECT alias whose aggregate it references.
-
-    Previously the encoder always used the first aggregate alias, which produced
-    wrong constraints whenever a query had more than one aggregate (e.g.
-    SELECT SUM(x), COUNT(*) ... HAVING COUNT(*) > 2 would filter on SUM).
-    """
-    for sel in select_exprs:
-        if sel.expr_type not in ("sum", "count_star", "count_col"):
-            continue
-        if cond.agg_type != sel.expr_type:
-            continue
-        # COUNT(*) has no column; SUM/COUNT(col) must match the referenced column.
-        if sel.expr_type == "count_star" or cond.agg_col == sel.col_name:
-            return sel.alias
-    return None
+    raise ValueError(f"Unsupported comparison operator '{cond.op}'.")
 
 
 def _having_pred(cond: ParsedCondition, sv: SymValue) -> Optional[BoolRef]:

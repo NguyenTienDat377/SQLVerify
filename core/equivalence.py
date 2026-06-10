@@ -28,6 +28,7 @@ Usage:
 """
 
 import sqlite3
+from collections import Counter
 from typing import Optional
 
 import z3
@@ -156,6 +157,21 @@ def _run(
         counterexample_db, schema, sql_v1, sql_v2
     )
 
+    # 9. Soundness guardrail: the witness must actually reproduce the
+    # divergence. If SQLite returns identical bags for both queries, the Z3
+    # encoding disagreed with real SQL semantics — report the bug instead of
+    # showing the user a fake counterexample.
+    if _witness_outputs_differ(v1_output, v2_output) is False:
+        return VerificationResult(
+            status="error",
+            error_message=(
+                "Internal inconsistency: the solver reported a divergence, but "
+                "both queries return identical results on the generated witness "
+                "database. This indicates an encoding bug in SQLVerify — do not "
+                "trust this verdict; please report it with the schema and queries."
+            ),
+        )
+
     return VerificationResult(
         status="divergent",
         counterexample_db=counterexample_db,
@@ -279,13 +295,36 @@ def _classify_divergence(
         )
     else:
         # Same cardinality but the bags differ in content/multiplicity.
-        from collections import Counter
         b1 = Counter(tuple(r) for r in rows1)
         b2 = Counter(tuple(r) for r in rows2)
         if b1 != b2:
             parts.append("row values differ for the same number of rows")
 
     return "; ".join(parts) if parts else "queries produce different output"
+
+
+def _witness_outputs_differ(
+    v1_output: list[dict],
+    v2_output: list[dict],
+) -> Optional[bool]:
+    """Compare the two SQLite outputs as bags of value tuples.
+
+    Returns True when they differ, False when they are identical, and None
+    when either query failed to execute (so no conclusion can be drawn —
+    e.g. dialect-specific syntax SQLite cannot run).
+    """
+    def bag(rows: list[dict]) -> Optional[Counter]:
+        out = []
+        for r in rows:
+            if len(r) == 1 and "error" in r:
+                return None   # execution failed; can't compare
+            out.append(tuple(r.values()))
+        return Counter(out)
+
+    b1, b2 = bag(v1_output), bag(v2_output)
+    if b1 is None or b2 is None:
+        return None
+    return b1 != b2
 
 
 # ---------------------------------------------------------------------------
@@ -333,10 +372,10 @@ def _materialize_witness(model, db: SymbolicDB) -> dict:
     # as real strings. Without this, a cell holding the interned int for
     # 'active' is materialised as the integer 1, and the real query
     # `WHERE status = 'active'` no longer matches — so the witness fails to
-    # reproduce the divergence under SQLite.
-    inv_intern: dict[tuple, dict[int, str]] = {}
-    for (t_name, c_name, literal), code in db._str_map.items():
-        inv_intern.setdefault((t_name, c_name), {})[code] = literal
+    # reproduce the divergence under SQLite. The intern namespace is global
+    # (one code per distinct string), so equal codes decode to equal strings
+    # across columns and column-to-column TEXT comparisons stay consistent.
+    inv_intern: dict[int, str] = {code: lit for lit, code in db._str_map.items()}
 
     def decode(table_name, col_name, value):
         col = db.schema.get_table(table_name) and db.schema.get_table(table_name).get_column(col_name)
@@ -344,11 +383,10 @@ def _materialize_witness(model, db: SymbolicDB) -> dict:
             return value
         if not isinstance(value, int):
             return value
-        mapping = inv_intern.get((table_name, col_name), {})
-        if value in mapping:
-            return mapping[value]
+        if value in inv_intern:
+            return inv_intern[value]
         # A value never compared against a literal: synthesise a string that is
-        # guaranteed distinct from every interned literal for this column.
+        # guaranteed distinct from every interned literal.
         return f"__sv_{value}"
 
     for table_name, col_vars in db.vars.items():
