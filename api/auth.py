@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from loguru import logger
 from pydantic import BaseModel
 
@@ -138,3 +139,14 @@ async def logout():
     response.delete_cookie("sb-access-token")
     response.delete_cookie("sb-refresh-token")
     return response
+
+# ---------------------------------------------------------------------------
+# API Docs
+# ---------------------------------------------------------------------------
+@router.get("/docs", include_in_schema=False)
+async def get_swagger_docs(request: Request):
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="SQLVerify API Docs",
+        oauth2_redirect_url="/auth/docs/oauth2-redirect",
+    )

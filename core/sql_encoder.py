@@ -1063,12 +1063,23 @@ def encode_query(
                     f"'{galias}.{gcol}' belongs to the joined table. "
                     "Swap the join direction to group by that table's columns."
                 )
+        group_key_cols = {gcol for (_, gcol) in parsed.group_by}
         for sel in parsed.select_exprs:
-            if sel.expr_type == "column" and resolve(sel.table_alias) != from_tname:
-                raise ValueError(
-                    "Non-aggregated SELECT columns in a GROUP BY query must "
-                    "come from the FROM table in V1."
-                )
+            if sel.expr_type == "column":
+                if resolve(sel.table_alias) != from_tname:
+                    raise ValueError(
+                        "Non-aggregated SELECT columns in a GROUP BY query must "
+                        "come from the FROM table in V1."
+                    )
+                # A bare column that is not a group key is invalid standard SQL
+                # (its value within a group is ambiguous; PostgreSQL rejects it,
+                # SQLite picks an arbitrary row). Encoding it as the group
+                # leader's value would silently invent deterministic semantics.
+                if sel.col_name not in group_key_cols:
+                    raise ValueError(
+                        f"Non-aggregated SELECT column '{sel.col_name}' must "
+                        "appear in GROUP BY."
+                    )
         if is_right:
             # Null-extended right rows have NULL FROM-side keys and form one
             # extra group. If a key column were nullable, matched rows could

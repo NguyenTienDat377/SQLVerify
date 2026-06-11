@@ -24,12 +24,16 @@ Returns JSON:
 
 import time
 import markdown
+import nh3
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Request
 from loguru import logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from fastapi import Request
 
 from core.equivalence import check_equivalence
 from core.models import VerificationResult
@@ -40,7 +44,7 @@ from db.repositories.verification_runs import save_run, get_recent_runs, update_
 
 
 templates = Jinja2Templates(directory="web/templates")
-templates.env.filters["markdown"] = lambda text: markdown.markdown(text) if text else ""
+templates.env.filters["markdown"] = lambda text: nh3.clean(markdown.markdown(text)) if text else ""
 
 router = APIRouter(prefix="/api", tags=["verify"])
 
@@ -173,14 +177,15 @@ async def generate_explanation(run_id: str, request: Request):
     from db.repositories.verification_runs import get_run_by_id
 
     row = await get_run_by_id(run_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Run not found.")
+    requester_id = getattr(request.state, "user_id", None)
+    if not row or row.get("user_id") != requester_id:
+        raise HTTPException(status_code=404)
     if row["status"] != "divergent":
         raise HTTPException(status_code=400, detail="Explanation only available for divergent results.")
 
     # Return cached explanation if already generated — no duplicate LLM call
     if row.get("explanation"):
-        safe = markdown.markdown(row["explanation"])
+        safe = nh3.clean(markdown.markdown(row["explanation"]))
         html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe}</div>'
         return HTMLResponse(content=html)
 
@@ -196,7 +201,7 @@ async def generate_explanation(run_id: str, request: Request):
     explanation = await explain_result(result, row["sql_v1"], row["sql_v2"])
     await update_explanation(run_id, explanation)
 
-    safe_explanation = markdown.markdown(explanation)
+    safe_explanation = nh3.clean(markdown.markdown(explanation))
     html = f'<div class="explanation-box"><div class="explanation-label">AI Explanation</div>{safe_explanation}</div>'
     return HTMLResponse(content=html)
 
@@ -277,12 +282,9 @@ async def history(request: Request):
 async def history_detail(run_id: str, request: Request):
     from db.repositories.verification_runs import get_run_by_id
     row = await get_run_by_id(run_id)
-    if not row:
-        return templates.TemplateResponse(
-            request=request,
-            name="partials/result.html",
-            context={"result": None}
-        )
+    requester_id = getattr(request.state, "user_id", None)
+    if not row or row.get("user_id") != requester_id:
+        raise HTTPException(status_code=404)
 
     # Reconstruct a VerificationResult from the stored row
     result = VerificationResult(

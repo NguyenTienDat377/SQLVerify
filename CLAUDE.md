@@ -139,10 +139,23 @@ known equivalent/divergent pairs (incl. LEFT/RIGHT JOIN ON-vs-WHERE cases) and
 fail-closed rejection of unsupported constructs. Run with
 `.venv/bin/python tests/smoke_test.py` (no pytest required, but pytest-compatible).
 
+`tests/paper_cases_test.py` — 18 regression tests derived from the VeriEQL
+paper (`3649849.pdf`): IC-PK composite keys, IC-FK/IC-NN-dependent
+equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
+bag multiplicity. Same runner style as the smoke test.
+
+`tests/differential_test.py` — differential fuzzing: random V1-subset query
+pairs verified by Z3, then cross-checked against concrete SQLite execution
+(every "equivalent" verdict attacked with sampled databases within the bound;
+every "divergent" witness replayed). Run with
+`.venv/bin/python tests/differential_test.py [--seeds N --bound B]`.
+
+`docs/encoding_audit.md` — rule-by-rule audit of the Z3 encoding against the
+paper (Figs 8–12, Eqns 1–2), with verdicts and the audit campaign results.
+
 Still missing:
 - `core/ddl_parser.py` — DDL parsing edge cases
 - `api/verify.py` — endpoint smoke tests
-- Differential testing (random query pairs vs concrete SQLite execution)
 
 ---
 
@@ -179,7 +192,7 @@ Everything outside the supported subset is **rejected with a clear error** (fail
 - Boolean literals in predicates (`WHERE active = TRUE`) are rejected
 - CHECK constraints parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs)
 - Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list semantics — `ORDER BY` is accepted but ignored
-- GROUP BY merges rows with equal keys (Dedup); group keys and bare SELECT columns must come from the FROM table (swap the join direction if you need the other table's keys). RIGHT JOIN + GROUP BY requires non-nullable group keys.
+- GROUP BY merges rows with equal keys (Dedup); group keys and bare SELECT columns must come from the FROM table (swap the join direction if you need the other table's keys). A bare SELECT column must also appear in GROUP BY (ambiguous projections — invalid in standard SQL — are rejected). RIGHT JOIN + GROUP BY requires non-nullable group keys.
 - HAVING supports aggregate comparisons; the aggregate does NOT need to appear in the SELECT list
 - Integer value domain is a finite window `[-(bound*4 + max|literal|), bound*4 + max|literal|]` — automatically widened to cover every numeric literal in the queries; an "equivalent" verdict is sound only within this window
 - `bound` (default 3) may miss bugs requiring more row interactions (rare in practice)

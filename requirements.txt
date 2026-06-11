@@ -15,3 +15,5 @@ pytest>=8.2.0
 pytest-asyncio>=0.23.7
 sqlglot >= 30.7.0
 markdown>=3.5.0
+nh3>=0.2.0
+slowapi>=0.1.9
