@@ -1,100 +1,198 @@
-{% extends "base.html" %}
-
-{% block content %}
+{% extends "base.html" %} {% block content %}
 <div class="pricing-header">
-    <h1 class="pricing-title">Simple, transparent pricing</h1>
-    <p class="pricing-subtitle">Start for free, then upgrade when you need more power. No hidden fees or surprise charges.</p>
+  <h1 class="pricing-title">Simple, transparent pricing</h1>
+  <p class="pricing-subtitle">
+    Start for free, then upgrade when you need more power. No hidden fees or
+    surprise charges.
+  </p>
 </div>
 
 <div class="pricing-grid">
-    <!-- Free Tier -->
-    <div class="pricing-card">
-        <h3 class="pricing-tier">Free</h3>
-        <div class="pricing-price">$0 <span class="pricing-period">/ month</span></div>
-        
-        <ul class="pricing-features">
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                100 runs per month
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Community Support
-            </li>
-        </ul>
-        
-        <a href="/auth/login" class="btn btn-pricing btn-pricing-secondary">Get Started</a>
+  <!-- Free Tier -->
+  <div class="pricing-card">
+    <h3 class="pricing-tier">Free</h3>
+    <div class="pricing-price">
+      $0 <span class="pricing-period">/ month</span>
     </div>
 
-    <!-- Individual Tier -->
-    <div class="pricing-card popular">
-        <div class="popular-badge">Most Popular</div>
-        <h3 class="pricing-tier">Individual</h3>
-        <div class="pricing-price">$9 <span class="pricing-period">/ month</span></div>
-        
-        <ul class="pricing-features">
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                500 runs per month
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Priority Support
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Advanced Analytics
-            </li>
-        </ul>
-        
-        <!-- Replace YOUR_STORE_NAME with your actual Lemon Squeezy store name -->
-        <a href="https://YOUR_STORE_NAME.lemonsqueezy.com/checkout/buy/1780277" class="btn btn-pricing btn-pricing-primary">Upgrade to Individual</a>
+    <ul class="pricing-features">
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        100 runs per month
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Community Support
+      </li>
+    </ul>
+
+    <a href="/auth/login" class="btn btn-pricing btn-pricing-secondary"
+      >Get Started</a
+    >
+  </div>
+
+  <!-- Individual Tier -->
+  <div class="pricing-card popular">
+    <div class="popular-badge">Most Popular</div>
+    <h3 class="pricing-tier">Individual</h3>
+    <div class="pricing-price">
+      $9 <span class="pricing-period">/ month</span>
     </div>
 
-    <!-- Team Tier -->
-    <div class="pricing-card">
-        <h3 class="pricing-tier">Team</h3>
-        <div class="pricing-price">$49 <span class="pricing-period">/ month</span></div>
-        
-        <ul class="pricing-features">
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Unlimited runs
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Dedicated Support
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Custom Integrations
-            </li>
-            <li class="pricing-feature">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Team Management
-            </li>
-        </ul>
-        
-        <!-- Replace YOUR_STORE_NAME with your actual Lemon Squeezy store name -->
-        <a href="https://YOUR_STORE_NAME.lemonsqueezy.com/checkout/buy/1780279" class="btn btn-pricing btn-pricing-secondary">Upgrade to Team</a>
+    <ul class="pricing-features">
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        500 runs per month
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Priority Support
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Advanced Analytics
+      </li>
+    </ul>
+
+    <!-- Replace sqlverify with your actual Lemon Squeezy store name -->
+    <a
+      href="https://sqlverify.lemonsqueezy.com/checkout/buy/1780277"
+      class="btn btn-pricing btn-pricing-primary"
+      >Upgrade to Individual</a
+    >
+  </div>
+
+  <!-- Team Tier -->
+  <div class="pricing-card">
+    <h3 class="pricing-tier">Team</h3>
+    <div class="pricing-price">
+      $49 <span class="pricing-period">/ month</span>
     </div>
+
+    <ul class="pricing-features">
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Unlimited runs
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Dedicated Support
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Custom Integrations
+      </li>
+      <li class="pricing-feature">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Team Management
+      </li>
+    </ul>
+
+    <!-- Replace sqlverify with your actual Lemon Squeezy store name -->
+    <a
+      href="https://sqlverify.lemonsqueezy.com/checkout/buy/1780279"
+      class="btn btn-pricing btn-pricing-secondary"
+      >Upgrade to Team</a
+    >
+  </div>
 </div>
 {% endblock %}
