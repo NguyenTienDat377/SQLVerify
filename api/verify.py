@@ -48,6 +48,8 @@ templates.env.filters["markdown"] = lambda text: nh3.clean(markdown.markdown(tex
 
 router = APIRouter(prefix="/api", tags=["verify"])
 
+limiter = Limiter(key_func=get_remote_address)
+
 
 # ---------------------------------------------------------------------------
 # Request / Response models

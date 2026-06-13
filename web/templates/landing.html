@@ -28,6 +28,7 @@
             <div class="landing-nav-links">
                 <a href="#features">Features</a>
                 <a href="#how-it-works">How it Works</a>
+                <a href="/pricing">Pricing</a>
                 <a href="/auth/login" class="btn btn-primary btn-glow">Start Verifying</a>
             </div>
         </nav>
@@ -114,5 +115,24 @@
             </div>
         </footer>
     </div>
+<script>
+  (function () {
+    var params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
+    if (!params.access_token) return;
+    fetch("/auth/set-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        access_token:  params.access_token,
+        refresh_token: params.refresh_token || "",
+        expires_in:    parseInt(params.expires_in || "3600", 10)
+      })
+    })
+    .then(function(r) {
+      location.replace(r.ok ? "/verify" : "/?auth_error=session_failed");
+    })
+    .catch(function() { location.replace("/?auth_error=network_error"); });
+  })();
+</script>
 </body>
 </html>

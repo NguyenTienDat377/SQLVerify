@@ -25,8 +25,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-_PUBLIC_PREFIXES = ("/static", "/auth")
-_PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health"}
+_PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
+_PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health", "/pricing"}
 
 _jwks_client: PyJWKClient | None = None
 

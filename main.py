@@ -26,6 +26,7 @@ from core.logger import setup_logging
 from loguru import logger
 from api.verify import router as verify_router
 from api.auth import router as auth_router
+from api.webhooks import router as webhooks_router
 from auth.middleware import JWTMiddleware
 
 setup_logging()
@@ -57,8 +58,10 @@ app.add_middleware(
 app.add_middleware(JWTMiddleware)
 
 # Routers
-app.include_router(auth_router)
 app.include_router(verify_router)
+app.include_router(auth_router)
+app.include_router(webhooks_router)
+
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
@@ -103,5 +106,15 @@ async def verify_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="verify.html",
+        context={"user_email": user_email},
+    )
+
+
+@app.get("/pricing")
+async def pricing_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="pricing.html",
         context={"user_email": user_email},
     )
