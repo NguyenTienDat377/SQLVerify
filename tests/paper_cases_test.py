@@ -128,6 +128,65 @@ def test_left_join_on_fk_diverges_from_not_null_filter():
     )
 
 
+# ── Multiple INNER joins: bag-equivalence over a join chain (Eqns 1-2) ───────
+# 95.7% of the paper's benchmark queries join multiple tables. INNER joins are
+# associative and commutative under bag semantics, so the same 3-table chain
+# stated in a different table order must yield the same result bag.
+
+CHAIN_DDL = """
+CREATE TABLE a (
+    id INTEGER PRIMARY KEY,
+    val INTEGER
+);
+CREATE TABLE b (
+    id INTEGER PRIMARY KEY,
+    a_id INTEGER REFERENCES a(id),
+    val INTEGER
+);
+CREATE TABLE c (
+    id INTEGER PRIMARY KEY,
+    b_id INTEGER REFERENCES b(id),
+    val INTEGER
+);
+"""
+
+
+def test_three_table_inner_chain_reorder_equivalent():
+    _check(
+        "SELECT a.id, c.val FROM a "
+        "JOIN b ON b.a_id = a.id JOIN c ON c.b_id = b.id",
+        "SELECT a.id, c.val FROM c "
+        "JOIN b ON c.b_id = b.id JOIN a ON b.a_id = a.id",
+        "equivalent", ddl=CHAIN_DDL,
+    )
+
+
+def test_three_table_inner_chain_extra_filter_divergent():
+    # A predicate on the far table of the chain must change the bag.
+    _check(
+        "SELECT a.id FROM a JOIN b ON b.a_id = a.id JOIN c ON c.b_id = b.id",
+        "SELECT a.id FROM a JOIN b ON b.a_id = a.id JOIN c ON c.b_id = b.id "
+        "WHERE c.val > 0",
+        "divergent", ddl=CHAIN_DDL,
+    )
+
+
+# ── GROUP BY on a joined-table column (Dedup + Eval, §3.3) ────────────────────
+# An INNER JOIN forces e.did = d.did on every matched row, so grouping by the
+# joined table's key is identical to grouping by the FROM table's key. This was
+# previously rejected (GROUP BY was restricted to the FROM table); the join-bag
+# refactor lifts that restriction, and the pair now verifies as equivalent.
+
+def test_group_by_joined_key_equals_from_key():
+    _check(
+        "SELECT d.did, COUNT(*) AS n FROM emp e JOIN dept d ON e.did = d.did "
+        "GROUP BY d.did",
+        "SELECT e.did, COUNT(*) AS n FROM emp e JOIN dept d ON e.did = d.did "
+        "GROUP BY e.did",
+        "equivalent",
+    )
+
+
 def test_left_join_on_unique_key_preserves_left_rows():
     # PK uniqueness on dept.did means LEFT JOIN never duplicates an emp row,
     # and null extension never drops one: SELECT of a left column is a no-op.

@@ -74,8 +74,15 @@ class ClaudeProvider(LLMProvider):
             "messages": [{"role": "user", "content": prompt}],
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(self.API_URL, headers=headers, json=body)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(self.API_URL, headers=headers, json=body)
+        except httpx.HTTPError as e:
+            # Connection refused / timeout / DNS — i.e. the provider is down.
+            # Surface as ExplainerError so the caller degrades gracefully and
+            # the circuit breaker records a failure instead of the request
+            # crashing with an unhandled httpx error.
+            raise ExplainerError(f"Claude API request failed: {e}") from e
 
         if resp.status_code != 200:
             raise ExplainerError(
@@ -112,8 +119,11 @@ class GeminiProvider(LLMProvider):
             "generationConfig": {"maxOutputTokens": 512},
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, json=body)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json=body)
+        except httpx.HTTPError as e:
+            raise ExplainerError(f"Gemini API request failed: {e}") from e
 
         if resp.status_code != 200:
             raise ExplainerError(
@@ -152,8 +162,11 @@ class OpenAIProvider(LLMProvider):
             "messages": [{"role": "user", "content": prompt}],
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(self.API_URL, headers=headers, json=body)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(self.API_URL, headers=headers, json=body)
+        except httpx.HTTPError as e:
+            raise ExplainerError(f"OpenAI API request failed: {e}") from e
 
         if resp.status_code != 200:
             raise ExplainerError(

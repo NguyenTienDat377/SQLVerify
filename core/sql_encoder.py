@@ -3,13 +3,15 @@ core/sql_encoder.py
 
 Parses a SELECT query and encodes it as Z3 formulas over a symbolic database.
 
-V1 supported subset:
+Supported subset:
   SELECT   — column refs, SUM(col), COUNT(*), COUNT(col), COALESCE(agg, default)
   FROM     — single table with alias
-  JOIN     — one INNER, LEFT, or RIGHT join with a simple ON equality condition
+  JOIN     — any number of INNER joins, OR one LEFT/RIGHT join, each with a
+             simple ON equality condition. Outer joins cannot be combined with
+             another join (multi-table joins must be INNER).
   WHERE    — AND chains of comparisons (column vs literal, column vs column),
              IS NULL / IS NOT NULL
-  GROUP BY — one or more columns from the FROM table
+  GROUP BY — one or more columns from any joined table
   HAVING   — aggregate comparisons (SUM(col) > v, COUNT(*) = v, ...)
 
 Fail-closed policy: anything outside this subset raises ValueError instead of
@@ -17,10 +19,10 @@ being silently dropped. A verifier must never weaken the encoded query — a
 dropped predicate or SELECT expression can turn a real divergence into a false
 "equivalent" verdict, which is the one failure mode this tool cannot have.
 
-Out of scope for V1 (all rejected with ValueError):
-  FULL OUTER / CROSS joins, self-joins, multiple joins, OR / IN / BETWEEN /
-  LIKE predicates, window functions, CTEs, subqueries, UNION, DISTINCT,
-  LIMIT/OFFSET, string/timestamp ordering comparisons.
+Out of scope (all rejected with ValueError):
+  FULL OUTER / CROSS joins, self-joins, outer joins combined with another join,
+  OR / IN / BETWEEN / LIKE predicates, window functions, CTEs, subqueries,
+  UNION, DISTINCT, LIMIT/OFFSET, string/timestamp ordering comparisons.
   (ORDER BY is accepted but ignored — equivalence is checked under bag
   semantics, where output order is immaterial.)
 
@@ -38,6 +40,7 @@ Usage:
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass, replace
 from typing import Optional
@@ -710,8 +713,9 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
             on_right_col=right_col.name,
         ))
 
-    if len(joins) > 1:
-        raise ValueError("V1 supports at most one JOIN per query.")
+    # Multiple joins are allowed when every join is INNER (see encode_query's
+    # dispatch). An outer join combined with any other join is rejected there —
+    # multi-table joins must be INNER in this version.
 
     # ── SELECT expressions ───────────────────────────────────────────────────
     select_exprs = [_parse_select_expr(sel) for sel in stmt.expressions]
@@ -877,15 +881,33 @@ def encode_query(
 
     from_alias = parsed.from_alias
     from_tname = parsed.from_table
+
+    # Self-join guard: SymbolicDB rows are keyed by real table name, so two
+    # aliases of the same table would unsoundly share the same symbolic rows.
+    if len(set(alias_map.values())) != len(alias_map):
+        raise ValueError("Self-joins are not supported.")
+
+    # ── Dispatch ─────────────────────────────────────────────────────────────
+    # INNER-only joins (including no join at all) use the N-table join-bag path
+    # below. A single LEFT/RIGHT join uses the dedicated outer-join path (its
+    # null-extension and ON-vs-WHERE handling are load-bearing — left unchanged).
+    # An outer join combined with any other join is rejected: multi-table joins
+    # must be INNER in this version.
+    outer_joins = [j for j in parsed.joins if j.join_type in ("LEFT", "RIGHT")]
+    inner_only = not outer_joins
+    if outer_joins and len(parsed.joins) > 1:
+        raise ValueError(
+            "Outer joins are supported only as a single join; multi-table "
+            "joins must be INNER in this version."
+        )
+
+    # Two-table outer-join context (only meaningful on the single-outer path).
     has_join = bool(parsed.joins)
     join = parsed.joins[0] if has_join else None
     join_alias = join.alias if has_join else None
     join_tname = resolve(join_alias) if has_join else None
     is_left = has_join and join.join_type == "LEFT"
     is_right = has_join and join.join_type == "RIGHT"
-
-    if has_join and join_tname == from_tname:
-        raise ValueError("Self-joins are not supported in V1.")
 
     # ── Cell accessors: map (alias, col) → (is_null, value) per row context ──
     def cellfn_single(i: int):
@@ -922,6 +944,33 @@ def encode_query(
             for cond in parsed.where_conditions
         ]
         return And(clauses) if clauses else BoolVal(True)
+
+    # ── INNER join bag: one entry per combination of rows across all tables ──
+    def build_inner_join_bag() -> list[tuple[BoolRef, object]]:
+        """Materialise the inner (and no-join) result as a bag of join rows.
+
+        Each entry is (present, cellfn): present holds iff every participating
+        row exists, every ON equality holds under three-valued logic, and the
+        WHERE clause keeps the combined tuple. For INNER joins ON and WHERE are
+        interchangeable, so folding WHERE in here is sound. Size is bound^n over
+        the n participating tables.
+        """
+        aliases = [from_alias] + [j.alias for j in parsed.joins]
+        bag: list[tuple[BoolRef, object]] = []
+        for combo in itertools.product(range(bound), repeat=len(aliases)):
+            idx = dict(zip(aliases, combo))
+
+            def cellfn(a, c, _idx=idx):
+                return db.cell(resolve(a), c, _idx[a])
+
+            clauses = [db.exists[resolve(a)][idx[a]] for a in aliases]
+            for j in parsed.joins:
+                ln, lv = cellfn(j.on_left_alias, j.on_left_col)
+                rn, rv = cellfn(j.on_right_alias, j.on_right_col)
+                clauses.append(And(Not(ln), Not(rn), lv == rv))
+            clauses.append(where_all(cellfn))
+            bag.append((And(clauses), cellfn))
+        return bag
 
     # ── ON condition only (three-valued equality); WHERE applies after ───────
     def on_match(i: int, j: int) -> BoolRef:
@@ -1052,6 +1101,85 @@ def encode_query(
     extra_constraints: list = []
     output: list[OutputTuple] = []
 
+    # ── INNER path (0..N joins): build the join bag, then project/aggregate ──
+    if inner_only:
+        bag = build_inner_join_bag()
+
+        if has_group:
+            # GROUP BY keys (and bare SELECT columns) may come from ANY joined
+            # table — dedup runs over join-bag rows, not FROM rows.
+            gk_set = {(galias, gcol) for (galias, gcol) in parsed.group_by}
+            for sel in parsed.select_exprs:
+                if sel.expr_type == "column" and \
+                        (sel.table_alias, sel.col_name) not in gk_set:
+                    # A bare column not in GROUP BY is ambiguous (invalid in
+                    # standard SQL); reject rather than invent a value.
+                    raise ValueError(
+                        f"Non-aggregated SELECT column '{sel.col_name}' must "
+                        "appear in GROUP BY."
+                    )
+
+            def group_key_eq(cf_a, cf_b) -> BoolRef:
+                clauses = []
+                for (galias, gcol) in parsed.group_by:
+                    n1, v1 = cf_a(galias, gcol)
+                    n2, v2 = cf_b(galias, gcol)
+                    # NULLs group together (SQL groups NULL keys into one group).
+                    clauses.append(Or(And(n1, n2),
+                                      And(Not(n1), Not(n2), v1 == v2)))
+                return And(clauses) if clauses else BoolVal(True)
+
+            for g, (g_present, g_cellfn) in enumerate(bag):
+                # Row g leads its group iff it is present and no earlier present
+                # row shares its key.
+                earlier = [Not(And(bag[h][0], group_key_eq(bag[h][1], g_cellfn)))
+                           for h in range(g)]
+                base_present = And(g_present, *earlier) if earlier else g_present
+                contribs = [(And(group_key_eq(cf, g_cellfn), pres), cf)
+                            for (pres, cf) in bag]
+                cols = []
+                for sel in parsed.select_exprs:
+                    if sel.expr_type == "column":
+                        n, v = g_cellfn(sel.table_alias, sel.col_name)
+                        cols.append(SymValue(n, v))
+                    else:
+                        cols.append(agg_value(sel, contribs))
+                present = And(base_present, *having_clauses(contribs)) \
+                    if parsed.having_conditions else base_present
+                output.append(OutputTuple(present, cols))
+
+        elif has_agg:
+            # Aggregate without GROUP BY: exactly one output row.
+            for sel in parsed.select_exprs:
+                if sel.expr_type == "column":
+                    raise ValueError(
+                        f"Bare column '{sel.alias}' mixed with aggregates "
+                        "requires GROUP BY."
+                    )
+            contribs = [(pres, cf) for (pres, cf) in bag]
+            cols = [agg_value(sel, contribs) for sel in parsed.select_exprs]
+            present = And(having_clauses(contribs)) \
+                if parsed.having_conditions else BoolVal(True)
+            output.append(OutputTuple(present, cols))
+
+        else:
+            # Plain projection: one candidate tuple per join-bag row.
+            if parsed.having_conditions:
+                raise ValueError(
+                    "HAVING without GROUP BY or aggregates is not supported.")
+            for (pres, cf) in bag:
+                cols = [proj(sel, cf) for sel in parsed.select_exprs]
+                output.append(OutputTuple(pres, cols))
+
+        return QueryFormula(
+            output=output,
+            arity=arity,
+            col_aliases=col_aliases,
+            extra_constraints=extra_constraints,
+            bound=bound,
+        )
+
+    # ── Single LEFT/RIGHT outer-join path (unchanged) ────────────────────────
     if has_group:
         # ── GROUP BY: one output tuple per distinct key (Dedup + Eval). ──────
         # V1 restriction: group keys (and bare SELECT columns) must come from

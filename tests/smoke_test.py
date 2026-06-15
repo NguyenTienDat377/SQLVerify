@@ -29,6 +29,10 @@ CREATE TABLE transactions (
     amount INTEGER,
     dept INTEGER
 );
+CREATE TABLE departments (
+    dept_id INTEGER PRIMARY KEY,
+    region TEXT
+);
 """
 
 
@@ -150,11 +154,57 @@ def test_select_arithmetic_rejected():
     _check(q, q, "error", msg_contains="Unsupported")
 
 
-def test_multiple_joins_rejected():
+# ── Multiple INNER joins ─────────────────────────────────────────────────────
+
+def test_three_table_inner_join_self_equivalent():
     q = ("SELECT a.account_id FROM accounts a "
          "JOIN transactions t ON a.account_id = t.account_id "
-         "JOIN transactions u ON a.account_id = u.account_id")
-    _check(q, q, "error", msg_contains="at most one JOIN")
+         "JOIN departments d ON t.dept = d.dept_id "
+         "WHERE t.amount > 0")
+    _check(q, q, "equivalent")
+
+
+def test_three_table_inner_join_reorder_equivalent():
+    # INNER joins are associative/commutative under bag semantics: stating the
+    # joins in a different order yields the same result bag.
+    _check(
+        "SELECT a.account_id, d.region FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "SELECT a.account_id, d.region FROM departments d "
+        "JOIN transactions t ON t.dept = d.dept_id "
+        "JOIN accounts a ON a.account_id = t.account_id",
+        "equivalent",
+    )
+
+
+def test_three_table_inner_join_dropped_predicate_divergent():
+    # Dropping the second join's filter must change the result.
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id WHERE d.dept_id > 1",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "divergent",
+    )
+
+
+def test_group_by_joined_table_column_accepted():
+    # GROUP BY on a JOINED table's column (previously rejected) now verifies.
+    q = ("SELECT d.region, COUNT(*) AS c FROM accounts a "
+         "JOIN transactions t ON a.account_id = t.account_id "
+         "JOIN departments d ON t.dept = d.dept_id "
+         "GROUP BY d.region")
+    _check(q, q, "equivalent")
+
+
+def test_outer_join_plus_inner_join_rejected():
+    q = ("SELECT a.account_id FROM accounts a "
+         "LEFT JOIN transactions t ON a.account_id = t.account_id "
+         "JOIN departments d ON t.dept = d.dept_id")
+    _check(q, q, "error", msg_contains="Outer joins are supported only as a single join")
 
 
 def test_self_join_rejected():

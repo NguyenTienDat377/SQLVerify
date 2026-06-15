@@ -10,8 +10,14 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 
 **Core value proposition:** Deterministic formal verification as an antidote to probabilistic AI output — proof that a query does what it's intended to do, not just that it runs.
 
-**Target users (V1):** Backend engineers reviewing AI-generated SQL before it ships to production.  
-**Target users (V2):** AI agent pipelines that need automated SQL validation with minimal human review.  
+**Two delivery surfaces (same core engine):**
+
+- **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`, on-demand "Explain" button).
+- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results.
+
+**Future function** - Check the queries if it fits business input via a box of users' expected
+
+**Pricing:** Freemium — the supported SQL subset is deliberately wide (real multi-table-join queries verify, not just two-table demos) to grow the top of the funnel; anything outside the subset stays fail-closed.
 **Market timing:** Positioned for 2026 as LLM-in-production adoption matures and SQL agent use grows.
 
 ---
@@ -164,7 +170,7 @@ Still missing:
 | Decision | Rationale |
 |---|---|
 | `bound=3` hardcoded in `equivalence.py` | Catches >95% of real SQL semantic bugs. Not exposed in UI — would confuse engineers. Power users can override via env var. |
-| V1 scope: single JOIN only (INNER, LEFT, or RIGHT) | Keeps Z3 encoding tractable. No CTEs, window functions, subqueries, UNION, FULL OUTER JOIN, self-joins. ON and WHERE are encoded separately — the distinction changes outer-join results. |
+| Join scope: any number of INNER joins, or one LEFT/RIGHT join | INNER joins are encoded as an N-table "join bag" (one entry per row combination across the joined tables); for INNER joins ON ≡ WHERE, so there is no null-extension subtlety. A single LEFT/RIGHT join uses a dedicated outer-join path where ON and WHERE are encoded separately (the distinction changes outer-join results). An outer join combined with any other join is rejected — multi-table joins must be INNER. Still no CTEs, window functions, subqueries, UNION, FULL OUTER, CROSS, or self-joins. |
 | Fail-closed parsing/encoding | Any SQL construct outside the supported subset raises `ValueError` (→ status `error`) instead of being silently dropped. A dropped predicate or SELECT expression weakens the encoding and can produce a false "equivalent" — the one failure mode a verifier must not have. Never "skip" unsupported syntax. |
 | Witness cross-check in `equivalence.py` | After Z3 finds a divergence, both queries run on the SQLite witness; if their outputs agree, the verdict is downgraded to `error` (encoder bug) instead of showing a fake counterexample. |
 | HTMX for frontend interactivity | No React build step, no npm. Jinja2 + HTMX keeps the stack simple and server-rendered. |
@@ -180,7 +186,7 @@ Still missing:
 
 Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored.
 
-- Single JOIN per query only (INNER, LEFT, or RIGHT). No FULL OUTER, CROSS, or self-joins. JOIN ON must be a single column equality.
+- Any number of INNER joins per query, OR exactly one LEFT/RIGHT join. An outer join cannot be combined with another join (multi-table joins must be INNER). No FULL OUTER, CROSS, or self-joins. Each JOIN ON must be a single column equality. Note: the INNER join bag is `bound^n` over n tables, so deep chains (n≥4) get slower and may return `unknown` on timeout — the bound is never silently lowered.
 - No CTEs (`WITH` clauses)
 - No window functions (`ROW_NUMBER`, `RANK`, etc.)
 - No subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`
@@ -192,7 +198,7 @@ Everything outside the supported subset is **rejected with a clear error** (fail
 - Boolean literals in predicates (`WHERE active = TRUE`) are rejected
 - CHECK constraints parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs)
 - Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list semantics — `ORDER BY` is accepted but ignored
-- GROUP BY merges rows with equal keys (Dedup); group keys and bare SELECT columns must come from the FROM table (swap the join direction if you need the other table's keys). A bare SELECT column must also appear in GROUP BY (ambiguous projections — invalid in standard SQL — are rejected). RIGHT JOIN + GROUP BY requires non-nullable group keys.
+- GROUP BY merges rows with equal keys (Dedup). For INNER (and no-join) queries, group keys and bare SELECT columns may come from any joined table. A bare SELECT column must still appear in GROUP BY (ambiguous projections — invalid in standard SQL — are rejected). The single LEFT/RIGHT outer-join path keeps the older restriction: group keys must come from the FROM table, and RIGHT JOIN + GROUP BY requires non-nullable group keys.
 - HAVING supports aggregate comparisons; the aggregate does NOT need to appear in the SELECT list
 - Integer value domain is a finite window `[-(bound*4 + max|literal|), bound*4 + max|literal|]` — automatically widened to cover every numeric literal in the queries; an "equivalent" verdict is sound only within this window
 - `bound` (default 3) may miss bugs requiring more row interactions (rare in practice)

@@ -11,10 +11,21 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 
 from core.models import VerificationResult
+from explainer.circuit_breaker import CircuitBreaker, CircuitOpenError
 from explainer.prompts import EQUIVALENCE_EXPLANATION
 from explainer.providers import ExplainerError, get_provider
+
+# One shared breaker per process guards every explanation call. When the
+# configured LLM provider is down/overloaded, this stops repeated doomed calls
+# (and the credit/latency they burn) until a cooldown elapses. Thresholds are
+# env-tunable for ops without a code change.
+_breaker = CircuitBreaker(
+    failure_threshold=int(os.getenv("EXPLAINER_BREAKER_THRESHOLD", "3")),
+    reset_timeout=float(os.getenv("EXPLAINER_BREAKER_RESET_S", "30")),
+)
 
 
 async def explain_result(
@@ -52,7 +63,14 @@ async def explain_result(
 
     try:
         provider = get_provider(provider_name)
-        return await provider.explain(prompt)
+        return await _breaker.call(provider.explain, prompt)
+    except CircuitOpenError:
+        # Provider has been failing — skip the call to avoid burning credits and
+        # latency on a downed service. Recovers automatically after the cooldown.
+        return (
+            "(Explanation temporarily unavailable: the AI provider appears to be "
+            "down, so we're skipping it for a moment. Try again shortly.)"
+        )
     except ExplainerError as e:
         # Never let explainer failure break the verification result
         return f"(Explanation unavailable: {e})"

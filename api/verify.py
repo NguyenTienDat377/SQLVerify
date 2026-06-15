@@ -33,7 +33,6 @@ from pydantic import BaseModel
 from typing import Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from fastapi import Request
 
 from core.equivalence import check_equivalence
 from core.models import VerificationResult
@@ -48,6 +47,9 @@ templates.env.filters["markdown"] = lambda text: nh3.clean(markdown.markdown(tex
 
 router = APIRouter(prefix="/api", tags=["verify"])
 
+# Per-IP rate limiter. It lives here with the routes, but is attached to the
+# real application (app.state.limiter) and given its exception handler in
+# main.py — that is the app that actually serves requests.
 limiter = Limiter(key_func=get_remote_address)
 
 
@@ -70,6 +72,20 @@ class VerifyResponse(BaseModel):
 
 MAX_FILE_BYTES = 512 * 1024  # 512 KB per file — SQL files are never bigger
 MAX_BOUND = 6
+
+# Per-surface Z3 timeouts. The web UI favours a snappy response (a human is
+# waiting), so it caps lower; CI/CD favours a definitive verdict over latency,
+# so it allows the solver longer before degrading to `unknown`. Deep INNER-join
+# chains (bound^n) are the main driver of long solves — see CLAUDE.md.
+WEB_TIMEOUT_MS = 15_000       # default for the interactive surface (POST /api/verify)
+WEB_MAX_TIMEOUT_MS = 60_000   # web ceiling — keep the UI responsive
+CICD_TIMEOUT_MS = 60_000      # default for the pipeline surface (POST /api/verify/text)
+MAX_TIMEOUT_MS = 120_000      # hard ceiling for caller-supplied CI/CD timeouts
+
+# Per-IP rate limit on the two solve endpoints. Verification is expensive (a Z3
+# solve can run up to MAX_TIMEOUT_MS), so an unthrottled endpoint lets one
+# client pin a worker. Shared by both surfaces; tune to taste.
+VERIFY_RATE_LIMIT = "30/minute"
 
 
 async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_name: str) -> str:
@@ -111,6 +127,7 @@ def _result_to_response(result: VerificationResult) -> VerifyResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/verify")
+@limiter.limit(VERIFY_RATE_LIMIT)
 async def verify_equivalence(
     request: Request,
     schema_file: Optional[UploadFile] = File(None, description="Flyway DDL file (.sql)"),
@@ -121,7 +138,7 @@ async def verify_equivalence(
     query_v2_text: Optional[str] = Form(None, description="Generated query text"),
     dialect:    str = Form(default="generic", description="SQL dialect"),
     bound:      int = Form(default=3, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
-    timeout_ms: int = Form(default=15_000, ge=1_000, le=60_000),
+    timeout_ms: int = Form(default=WEB_TIMEOUT_MS, ge=1_000, le=WEB_MAX_TIMEOUT_MS),
     explain:    Optional[str] = Form(default=None, description="Set to 'true' to request AI explanation"),
 ):
     """
@@ -218,11 +235,12 @@ class VerifyTextRequest(BaseModel):
     sql_v2:     str
     dialect:    str = "generic"
     bound:      int = 3
-    timeout_ms: int = 15_000
+    timeout_ms: int = CICD_TIMEOUT_MS
 
 
 @router.post("/verify/text", response_model=VerifyResponse)
-async def verify_equivalence_text(body: VerifyTextRequest):
+@limiter.limit(VERIFY_RATE_LIMIT)
+async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
     """
     Same as POST /api/verify but accepts JSON body with raw SQL strings.
     Useful for CI/CD integrations where file uploads are inconvenient.
@@ -233,6 +251,10 @@ async def verify_equivalence_text(body: VerifyTextRequest):
             detail=f"bound must be <= {MAX_BOUND}.",
         )
 
+    # Clamp to the hard ceiling rather than rejecting — a CI client asking for a
+    # generous timeout should get the ceiling, not a 400.
+    timeout_ms = max(1_000, min(body.timeout_ms, MAX_TIMEOUT_MS))
+
     start = time.monotonic()
     result = check_equivalence(
         ddl_sql=body.ddl_sql,
@@ -240,7 +262,7 @@ async def verify_equivalence_text(body: VerifyTextRequest):
         sql_v2=body.sql_v2,
         dialect=body.dialect,
         bound=body.bound,
-        timeout_ms=body.timeout_ms,
+        timeout_ms=timeout_ms,
     )
 
     duration_ms = int((time.monotonic() - start) * 1000)
@@ -248,7 +270,8 @@ async def verify_equivalence_text(body: VerifyTextRequest):
     if result.status == "divergent":
         result.explanation = await explain_result(result, body.sql_v1, body.sql_v2)
 
-    await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms)
+    await save_run(result, body.ddl_sql, body.sql_v1, body.sql_v2,
+                   body.dialect, duration_ms)
 
     return _result_to_response(result)
 

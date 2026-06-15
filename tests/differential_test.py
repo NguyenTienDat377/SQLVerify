@@ -75,7 +75,12 @@ class GenTable:
 
 
 def gen_schema(rng: random.Random) -> list[GenTable]:
-    """Two-table schema with randomized nullability, FK, and TEXT column."""
+    """Three-table schema with randomized nullability, FK, and TEXT column.
+
+    t3 chains off t2 (t3.t2_id -> t2.id) so the generator can emit 3-table
+    INNER-join chains (t1 x JOIN t2 y JOIN t3 z). Tables are ordered so the
+    concrete sampler resolves each FK against an already-populated parent.
+    """
     t1 = GenTable("t1", [
         GenColumn("id", "INTEGER", nullable=False, pk=True),
         GenColumn("a", "INTEGER", nullable=rng.random() < 0.7),
@@ -89,7 +94,13 @@ def gen_schema(rng: random.Random) -> list[GenTable]:
                   fk=("t1", "id") if rng.random() < 0.5 else None),
         GenColumn("c", "INTEGER", nullable=rng.random() < 0.7),
     ])
-    return [t1, t2]
+    t3 = GenTable("t3", [
+        GenColumn("id", "INTEGER", nullable=False, pk=True),
+        GenColumn("t2_id", "INTEGER", nullable=True,
+                  fk=("t2", "id") if rng.random() < 0.5 else None),
+        GenColumn("e", "INTEGER", nullable=rng.random() < 0.7),
+    ])
+    return [t1, t2, t3]
 
 
 def render_ddl(tables: list[GenTable]) -> str:
@@ -172,7 +183,10 @@ class GenQuery:
     def render(self) -> str:
         sql = "SELECT " + ", ".join(s.render() for s in self.select)
         sql += " FROM t1 x"
-        if self.join_type:
+        if self.join_type == "INNER3":
+            sql += (" JOIN t2 y ON x.id = y.t1_id"
+                    " JOIN t3 z ON y.id = z.t2_id")
+        elif self.join_type:
             kw = {"INNER": "INNER JOIN", "LEFT": "LEFT JOIN", "RIGHT": "RIGHT JOIN"}[self.join_type]
             sql += f" {kw} t2 y ON x.id = y.t1_id"
         if self.where:
@@ -184,14 +198,17 @@ class GenQuery:
         return sql
 
 
-def _query_cols(tables: list[GenTable], joined: bool):
+def _query_cols(tables: list[GenTable], join_type: Optional[str]):
     """(alias, col, ctype, nullable) for every column visible to the query."""
     out = []
     for c in tables[0].columns:
         out.append(("x", c.name, c.ctype, c.nullable))
-    if joined:
+    if join_type is not None:
         for c in tables[1].columns:
             out.append(("y", c.name, c.ctype, c.nullable))
+    if join_type == "INNER3":
+        for c in tables[2].columns:
+            out.append(("z", c.name, c.ctype, c.nullable))
     return out
 
 
@@ -215,8 +232,8 @@ def gen_pred(rng: random.Random, cols) -> Pred:
 
 
 def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
-    join_type = rng.choice([None, None, "INNER", "LEFT", "RIGHT"])
-    cols = _query_cols(tables, join_type is not None)
+    join_type = rng.choice([None, None, "INNER", "LEFT", "RIGHT", "INNER3"])
+    cols = _query_cols(tables, join_type)
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
 
     shape = rng.random()
@@ -228,11 +245,15 @@ def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
         select = [SelectItem("col", src=rng.choice([(a, n) for a, n, _, _ in cols]))
                   for _ in range(k)]
     elif shape < 0.85:
-        # GROUP BY key + one aggregate; keys must be FROM-table columns, and
-        # non-nullable for RIGHT JOIN (V1 restriction)
-        t1_keys = [("x", c.name) for c in tables[0].columns
-                   if join_type != "RIGHT" or not c.nullable]
-        key = rng.choice(t1_keys)
+        # GROUP BY key + one aggregate. INNER modes (incl. no join) may group by
+        # any visible column; the single-outer path keeps the V1 restriction of
+        # FROM-table keys, non-nullable under RIGHT JOIN.
+        if join_type in (None, "INNER", "INNER3"):
+            key_pool = [(a, n) for a, n, _, _ in cols]
+        else:
+            key_pool = [("x", c.name) for c in tables[0].columns
+                        if join_type != "RIGHT" or not c.nullable]
+        key = rng.choice(key_pool)
         group_by = [key]
         select = [SelectItem("col", src=key), _gen_agg(rng, num_cols)]
         if rng.random() < 0.4:
@@ -270,14 +291,14 @@ _FLIP = {">": ">=", ">=": ">", "<": "<=", "<=": "<", "=": "<>", "<>": "="}
 def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[GenQuery, str]:
     """Return (mutant, mutation_name). 'identity' leaves the query unchanged."""
     m = copy.deepcopy(q)
-    cols = _query_cols(tables, m.join_type is not None)
+    cols = _query_cols(tables, m.join_type)
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
 
     options = ["identity"]
     if m.where:
         options += ["flip_op", "shift_lit", "drop_pred", "flip_null"]
     options.append("add_pred")
-    if m.join_type:
+    if m.join_type in ("INNER", "LEFT", "RIGHT"):
         options.append("swap_join")
     if any(s.kind in ("count_star", "count_col") for s in m.select):
         options.append("count_swap")
@@ -316,13 +337,19 @@ def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[Gen
             m.where.append(gen_pred(rng, cols))
             return m, choice
         if choice == "swap_join":
-            m.join_type = rng.choice([t for t in ("INNER", "LEFT", "RIGHT")
-                                      if t != m.join_type])
-            if m.join_type == "RIGHT" and m.group_by:
-                # V1 requires non-nullable group keys under RIGHT JOIN
+            new = rng.choice([t for t in ("INNER", "LEFT", "RIGHT")
+                              if t != m.join_type])
+            if new in ("LEFT", "RIGHT") and m.group_by:
+                # The single-outer path keeps the V1 GROUP BY restriction:
+                # keys must be FROM-table columns, non-nullable under RIGHT.
+                # An INNER query may group by a joined-table column (lifted), so
+                # fall back to INNER rather than emit an invalid outer query.
                 nullable = {c.name for c in tables[0].columns if c.nullable}
-                if any(col in nullable for _, col in m.group_by):
-                    m.join_type = "INNER"
+                non_from = any(a != "x" for a, _ in m.group_by)
+                bad_right = new == "RIGHT" and any(c in nullable for _, c in m.group_by)
+                if non_from or bad_right:
+                    new = "INNER"
+            m.join_type = new
             return m, choice
         if choice == "count_swap":
             s = rng.choice([s for s in m.select if s.kind in ("count_star", "count_col")])

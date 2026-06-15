@@ -22,9 +22,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from core.logger import setup_logging
 from loguru import logger
-from api.verify import router as verify_router
+from api.verify import router as verify_router, limiter
 from api.auth import router as auth_router
 from api.webhooks import router as webhooks_router
 from auth.middleware import JWTMiddleware
@@ -45,6 +48,16 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Rate limiting (slowapi): the limiter is defined with the verify routes; it must
+# be attached to the serving app and given the 429 handler, or @limiter.limit
+# decorators raise at request time. In-memory storage is fine for a single
+# always-on container (per CLAUDE.md); a multi-instance deploy needs a shared
+# store (e.g. storage_uri="redis://...").
+app.state.limiter = limiter
+# slowapi's handler signature is narrower than FastAPI's ExceptionHandler type;
+# this is the documented wiring and correct at runtime.
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 # CORS — tighten in production to your actual frontend domain
 app.add_middleware(
