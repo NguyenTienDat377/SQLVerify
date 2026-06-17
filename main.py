@@ -11,6 +11,7 @@ Deploy on Render:
     Render detects uvicorn from the start command automatically.
 """
 
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -29,8 +30,10 @@ from core.logger import setup_logging
 from loguru import logger
 from api.verify import router as verify_router, limiter
 from api.auth import router as auth_router
+from api.keys import router as keys_router
 from api.webhooks import router as webhooks_router
 from auth.middleware import JWTMiddleware
+from db.repositories.api_keys import list_api_keys
 
 setup_logging()
 
@@ -59,10 +62,16 @@ app.state.limiter = limiter
 # this is the documented wiring and correct at runtime.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
-# CORS — tighten in production to your actual frontend domain
+# CORS — pinned to known origins (no wildcard). SITE_URL is the prod frontend;
+# localhost covers dev. Cookies are HttpOnly and we don't enable credentialed
+# CORS, but an explicit allowlist avoids exposing JSON responses to any origin.
+_cors_origins = [
+    o for o in (os.getenv("SITE_URL"), "http://localhost:8000", "http://127.0.0.1:8000")
+    if o
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -73,6 +82,7 @@ app.add_middleware(JWTMiddleware)
 # Routers
 app.include_router(verify_router)
 app.include_router(auth_router)
+app.include_router(keys_router)
 app.include_router(webhooks_router)
 
 
@@ -130,4 +140,17 @@ async def pricing_page(request: Request):
         request=request,
         name="pricing.html",
         context={"user_email": user_email},
+    )
+
+
+@app.get("/keys")
+async def keys_page(request: Request):
+    # Protected by JWTMiddleware (not a public path) — user_id is always set here.
+    user_id = getattr(request.state, "user_id", None)
+    user_email = getattr(request.state, "user_email", None)
+    keys = await list_api_keys(user_id) if user_id else []
+    return templates.TemplateResponse(
+        request=request,
+        name="keys.html",
+        context={"user_email": user_email, "keys": keys},
     )

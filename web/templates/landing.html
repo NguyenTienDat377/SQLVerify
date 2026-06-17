@@ -13,7 +13,9 @@
     
     <!-- CSS -->
     <link rel="stylesheet" href="/static/css/styles.css?v=1.1">
-    
+
+    <!-- HTMX (magic-link form) -->
+    <script src="https://unpkg.com/htmx.org@1.9.6"></script>
 </head>
 <body class="landing-page">
     <div class="landing-container">
@@ -53,6 +55,16 @@
                     </a>
                     <a href="#features" class="btn btn-secondary btn-large">Learn More</a>
                 </div>
+                <form class="magic-link-form"
+                      hx-post="/auth/magic-link"
+                      hx-target="#magic-link-msg"
+                      hx-swap="innerHTML"
+                      style="display:flex; gap:0.5rem; margin-top:1.25rem; max-width:440px;">
+                    <input type="email" name="email" placeholder="you@company.com"
+                           required aria-label="Email address" style="flex:1;">
+                    <button type="submit" class="btn btn-secondary btn-large">Email me a link</button>
+                </form>
+                <div id="magic-link-msg" style="margin-top:0.5rem; color: var(--text-secondary); font-size:0.9rem;"></div>
             </div>
             <div class="hero-visual">
                 <div class="hero-image-wrapper">

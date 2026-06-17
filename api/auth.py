@@ -15,7 +15,8 @@ and the browser redirects to /verify.
 import os
 from typing import Optional
 
-from fastapi import APIRouter, Request
+import httpx
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from loguru import logger
@@ -48,6 +49,48 @@ async def login(request: Request):
 
     logger.info("GitHub OAuth initiated | callback={url}", url=callback_url)
     return RedirectResponse(url=oauth_url)
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/magic-link  — email a passwordless sign-in link
+# ---------------------------------------------------------------------------
+
+@router.post("/magic-link")
+async def magic_link(request: Request, email: str = Form(...)):
+    """
+    Trigger a Supabase magic-link (OTP) email. The emailed link lands on the
+    existing /auth/callback with tokens in the URL hash — the same implicit
+    flow as GitHub OAuth — so no new token handling is needed here.
+    """
+    site_url = os.getenv("SITE_URL", str(request.base_url).rstrip("/"))
+    callback_url = f"{site_url}/auth/callback"
+    supabase_url = os.environ["SUPABASE_URL"].rstrip("/")
+    anon_key = os.environ["SUPABASE_ANON_KEY"]
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{supabase_url}/auth/v1/otp",
+                params={"redirect_to": callback_url},
+                headers={"apikey": anon_key, "Content-Type": "application/json"},
+                json={"email": email, "create_user": True},
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "Magic-link request rejected {code}: {body}",
+                code=resp.status_code, body=resp.text,
+            )
+    except httpx.HTTPError as e:
+        logger.warning("Magic-link request failed: {err}", err=e)
+
+    # Respond identically regardless of outcome — don't leak whether an address
+    # is registered, and keep the UX simple ("go check your email").
+    if "hx-request" in request.headers:
+        return HTMLResponse(
+            '<p class="auth-msg">Check your inbox — if that address is eligible, '
+            "a sign-in link is on its way.</p>"
+        )
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -129,13 +172,14 @@ async def set_session(body: SessionBody, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/logout
+# POST /auth/logout  — POST (not GET) so it can't be triggered by a cross-site
+# <img>/link/prefetch (CSRF-logout). 303 redirects the browser to GET "/".
 # ---------------------------------------------------------------------------
 
-@router.get("/logout")
+@router.post("/logout")
 async def logout():
     logger.info("User logged out")
-    response = RedirectResponse(url="/")
+    response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie("sb-access-token")
     response.delete_cookie("sb-refresh-token")
     return response

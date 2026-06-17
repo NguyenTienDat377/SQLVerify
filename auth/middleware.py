@@ -16,7 +16,9 @@ Protected page routes redirect to / on failure.
 Protected API routes return 401 JSON on failure.
 """
 
+import hashlib
 import os
+import time
 
 import jwt
 from jwt import PyJWKClient
@@ -24,6 +26,8 @@ from loguru import logger
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
 _PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
 _PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health", "/pricing"}
@@ -51,11 +55,13 @@ def _decode_token(token: str) -> dict | None:
     try:
         client = _get_jwks_client()
         signing_key = client.get_signing_key_from_jwt(token)
+        supabase_url = os.environ["SUPABASE_URL"].rstrip("/")
         return jwt.decode(
             token,
             signing_key.key,
             algorithms=["ES256", "RS256", "HS256"],
             audience="authenticated",
+            issuer=f"{supabase_url}/auth/v1",   # reject tokens from any other issuer
         )
     except jwt.ExpiredSignatureError:
         logger.debug("JWT expired")
@@ -66,27 +72,79 @@ def _decode_token(token: str) -> dict | None:
     return None
 
 
+# ── API-key resolution with a small per-process TTL cache ────────────────────
+# CI clients hammer one key; cache hash→user_id briefly to avoid a DB round-trip
+# on every request. Per-process (not shared across workers, same caveat as the
+# rate limiter / circuit breaker); a revoked key keeps working for up to the TTL.
+_API_KEY_TTL = 60.0
+_api_key_cache: dict[str, tuple[str, float]] = {}
+
+
+async def _resolve_api_key_cached(raw_key: str) -> str | None:
+    cache_key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    now = time.monotonic()
+    hit = _api_key_cache.get(cache_key)
+    if hit and hit[1] > now:
+        return hit[0]
+    user_id = await resolve_api_key(raw_key)
+    if user_id:
+        _api_key_cache[cache_key] = (user_id, now + _API_KEY_TTL)
+    return user_id
+
+
 class JWTMiddleware(BaseHTTPMiddleware):
+    """Authenticates each non-public request via one of two paths and injects
+    request.state.user_id:
+      - browser session: Supabase JWT in the `sb-access-token` cookie, or a
+        plain `Authorization: Bearer <jwt>`;
+      - CI/API client: a per-user API key as `Authorization: Bearer sqv_...`
+        or `X-API-Key: sqv_...`.
+    """
+
     async def dispatch(self, request: Request, call_next):
         if _is_public(request.url.path):
             return await call_next(request)
 
-        token = request.cookies.get("sb-access-token")
-        if not token:
-            header = request.headers.get("Authorization", "")
-            if header.startswith("Bearer "):
-                token = header[7:]
+        cookie_token = request.cookies.get("sb-access-token")
+        auth_header = request.headers.get("Authorization", "")
+        bearer = auth_header[7:] if auth_header.startswith("Bearer ") else None
+        x_api_key = request.headers.get("X-API-Key")
 
-        payload = _decode_token(token) if token else None
+        user_id = None
+        user_email = None
+        auth_method = None
 
-        if not payload:
+        # 1) Browser session — cookie, or a Bearer that is NOT one of our keys.
+        jwt_token = cookie_token or (
+            bearer if bearer and not bearer.startswith(KEY_PREFIX) else None
+        )
+        if jwt_token:
+            payload = _decode_token(jwt_token)
+            if payload:
+                user_id = payload.get("sub")
+                user_email = payload.get("email")
+                auth_method = "session"
+
+        # 2) Per-user API key — sqv_ Bearer or X-API-Key header.
+        if not user_id:
+            api_key = x_api_key or (
+                bearer if bearer and bearer.startswith(KEY_PREFIX) else None
+            )
+            if api_key:
+                resolved = await _resolve_api_key_cached(api_key)
+                if resolved:
+                    user_id = resolved
+                    auth_method = "api_key"
+
+        if not user_id:
             if request.url.path.startswith("/api"):
                 return JSONResponse(
                     status_code=401,
-                    content={"error": "Unauthorized", "detail": "Missing or invalid token."},
+                    content={"error": "Unauthorized", "detail": "Missing or invalid credentials."},
                 )
             return RedirectResponse(url="/")
 
-        request.state.user_id = payload.get("sub")
-        request.state.user_email = payload.get("email")
+        request.state.user_id = user_id
+        request.state.user_email = user_email
+        request.state.auth_method = auth_method
         return await call_next(request)

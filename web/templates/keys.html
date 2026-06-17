@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="keys-page" style="max-width: 720px; margin: 0 auto;">
+    <h1>API Keys</h1>
+    <p style="color: var(--text-secondary);">
+        Call <code>POST /api/verify/text</code> from CI with
+        <code>Authorization: Bearer sqv_…</code>. A key is shown only once, at
+        creation — store it somewhere safe.
+    </p>
+
+    <form class="key-create-form"
+          hx-post="/api/keys"
+          hx-target="#api-keys-panel"
+          hx-swap="innerHTML"
+          style="display: flex; gap: 0.5rem; margin: 1.5rem 0;">
+        <input type="text" name="name" placeholder="Key name (e.g. CI pipeline)"
+               required style="flex: 1;">
+        <button type="submit" class="btn btn-primary">Create key</button>
+    </form>
+
+    <div id="api-keys-panel">
+        {% include "partials/api_keys.html" %}
+    </div>
+</div>
+{% endblock %}

@@ -270,8 +270,9 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
     if result.status == "divergent":
         result.explanation = await explain_result(result, body.sql_v1, body.sql_v2)
 
+    user_id = getattr(request.state, "user_id", None)
     await save_run(result, body.ddl_sql, body.sql_v1, body.sql_v2,
-                   body.dialect, duration_ms)
+                   body.dialect, duration_ms, user_id=user_id)
 
     return _result_to_response(result)
 

@@ -63,17 +63,22 @@ SQLVerify/
 │
 ├── api/
 │   ├── __init__.py
-│   └── verify.py                   # ✅ DONE — all endpoints (see "What is DONE > api/" below)
+│   ├── verify.py                   # ✅ DONE — all endpoints (see "What is DONE > api/" below)
+│   ├── auth.py                     # ✅ DONE — GitHub OAuth + magic-link + session cookies + logout
+│   ├── keys.py                     # ✅ DONE — per-user API key CRUD (HTMX partials)
+│   └── webhooks.py                 # ✅ DONE — Lemon Squeezy subscription webhooks
 │
 ├── db/
 │   ├── __init__.py
 │   ├── client.py                   # ✅ DONE — Supabase client (uses service key)
 │   └── repositories/
 │       ├── __init__.py
-│       └── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation()
+│       ├── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation()
+│       ├── subscriptions.py        # ✅ DONE — upsert_subscription(), get_active_subscription()
+│       └── api_keys.py             # ✅ DONE — create/list/revoke/resolve per-user API keys (sha256-hashed)
 │
-├── auth/                           # ❌ NOT BUILT — Supabase auth middleware
-│   └── __init__.py
+├── auth/                           # ✅ DONE — JWTMiddleware (Supabase JWKS) + per-user API-key path
+│   └── middleware.py
 │
 └── web/
     ├── static/
@@ -301,3 +306,45 @@ GRANT SELECT, INSERT, UPDATE
 ```
 
 RLS is enabled. The service key in `db/client.py` bypasses RLS for server-side writes.
+
+## Migration #2
+
+Per-user API keys for the CI/CD auth path. Only the sha256 **hash** is stored;
+the raw `sqv_…` key is shown once at creation. Server lookups use the service
+key (RLS-bypassing) so `resolve_api_key()` can match a hash across all users.
+
+```sql
+CREATE TABLE IF NOT EXISTS public.api_keys (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    key_hash     TEXT NOT NULL UNIQUE,
+    key_prefix   TEXT NOT NULL,
+    created_at   TIMESTAMPTZ DEFAULT now(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS api_keys_user_id_idx  ON public.api_keys (user_id);
+CREATE INDEX IF NOT EXISTS api_keys_key_hash_idx ON public.api_keys (key_hash);
+
+ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "users_select_own_keys"
+    ON public.api_keys FOR SELECT TO authenticated
+    USING (user_id = auth.uid());
+
+CREATE POLICY "users_insert_own_keys"
+    ON public.api_keys FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "users_update_own_keys"
+    ON public.api_keys FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+
+GRANT SELECT, INSERT, UPDATE ON public.api_keys TO authenticated;
+```
+
+`SUPABASE_ANON_KEY` (already in the env list) is now used by `POST /auth/magic-link`
+to call Supabase's OTP endpoint.
