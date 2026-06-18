@@ -31,6 +31,7 @@
                 {% if user_email %}
                     <span class="topbar-email">{{ user_email }}</span>
                     <a href="/keys" class="topbar-link" style="color: var(--text-secondary); text-decoration: none; margin-right: 1rem; font-size: 0.875rem; font-weight: 500;">API Keys</a>
+                    <a href="/billing/portal" class="topbar-link" style="color: var(--text-secondary); text-decoration: none; margin-right: 1rem; font-size: 0.875rem; font-weight: 500;">Billing</a>
                     <form method="post" action="/auth/logout" style="display:inline;">
                         <button type="submit" class="btn-logout">Sign out</button>
                     </form>

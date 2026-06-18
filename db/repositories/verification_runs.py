@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -132,3 +133,31 @@ async def update_explanation(run_id: str, explanation: str) -> bool:
     except Exception as e:
         logger.error("Failed to update explanation for {run_id}: {err}", run_id=run_id, err=e)
         return False
+
+
+async def count_runs_this_month(user_id: str) -> int:
+    """
+    Count this user's verification runs since the start of the current UTC
+    calendar month — the basis for free-tier quota enforcement.
+
+    Returns 0 on any failure so the quota gate fails *open* (a DB hiccup must
+    never block a user mid-work).
+    """
+    if not user_id:
+        return 0
+    month_start = datetime.now(timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    try:
+        client = get_client()
+        response = (
+            client.table("verification_runs")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .gte("created_at", month_start.isoformat())
+            .execute()
+        )
+        return response.count or 0
+    except Exception as e:
+        logger.error("Failed to count monthly runs for {uid}: {err}", uid=user_id, err=e)
+        return 0

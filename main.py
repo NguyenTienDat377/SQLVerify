@@ -31,6 +31,7 @@ from loguru import logger
 from api.verify import router as verify_router, limiter
 from api.auth import router as auth_router
 from api.keys import router as keys_router
+from api.billing import router as billing_router
 from api.webhooks import router as webhooks_router
 from auth.middleware import JWTMiddleware
 from db.repositories.api_keys import list_api_keys
@@ -83,6 +84,7 @@ app.add_middleware(JWTMiddleware)
 app.include_router(verify_router)
 app.include_router(auth_router)
 app.include_router(keys_router)
+app.include_router(billing_router)
 app.include_router(webhooks_router)
 
 

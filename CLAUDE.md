@@ -221,6 +221,16 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude # claude | openai | google
+SITE_URL=                 # full origin, e.g. https://sqlverify.com (no trailing slash) — used by auth redirects + CORS
+
+# Billing (Lemon Squeezy)
+LEMONSQUEEZY_WEBHOOK_SECRET=   # Settings → Webhooks (HMAC signing secret)
+LEMONSQUEEZY_API_KEY=          # for the customer portal lookup
+LS_INDIVIDUAL_VARIANT_ID=      # numeric variant id (webhook → tier map)
+LS_TEAM_VARIANT_ID=
+LS_INDIVIDUAL_CHECKOUT_URL=    # the .../checkout/buy/<uuid> buy-link
+LS_TEAM_CHECKOUT_URL=
+FREE_TIER_MONTHLY_LIMIT=100    # optional; runs/month before upgrade required
 
 ````
 
@@ -348,3 +358,36 @@ GRANT SELECT, INSERT, UPDATE ON public.api_keys TO authenticated;
 
 `SUPABASE_ANON_KEY` (already in the env list) is now used by `POST /auth/magic-link`
 to call Supabase's OTP endpoint.
+
+## Migration #3
+
+Link Lemon Squeezy subscriptions to a SQLVerify user so plan/quota resolve by
+`user_id`. The in-app checkout (`/billing/checkout`) passes `user_id` as LS
+checkout custom data; the webhook stores it.
+
+```sql
+ALTER TABLE public.subscriptions
+    ADD COLUMN IF NOT EXISTS user_id UUID
+        REFERENCES auth.users(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS subscriptions_user_id_idx
+    ON public.subscriptions (user_id);
+```
+
+## Billing (Lemon Squeezy — Merchant of Record)
+
+LS handles global sales tax/VAT; we never touch card data. Flow:
+
+- **Checkout** — `GET /billing/checkout?plan=individual|team` (`api/billing.py`)
+  redirects to the plan's LS buy-link with `checkout[custom][user_id]` so the
+  webhook can link the sub to the buyer. Pricing-page CTAs point here.
+- **Webhook** — `POST /api/webhooks/lemonsqueezy` (signature-verified) upserts
+  `subscriptions` on `subscription_created/updated/cancelled/expired/resumed/
+  payment_failed`, reading `meta.custom_data.user_id`.
+- **Portal** — `GET /billing/portal` fetches a fresh signed customer-portal URL
+  from the LS API and redirects.
+- **Free tier** — `FREE_TIER_MONTHLY_LIMIT` (default 100) verification runs per
+  UTC calendar month, counted by `user_id`; any active paid tier
+  (`individual`/`team`) lifts the cap. Enforced in `_enforce_quota()` on both
+  `POST /api/verify` (HTMX 402 → `partials/upgrade_prompt.html`) and
+  `POST /api/verify/text` (JSON 402). **Fails open** on a lookup error.

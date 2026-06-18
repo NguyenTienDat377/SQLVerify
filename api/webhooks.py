@@ -79,13 +79,15 @@ HANDLED_EVENTS = {
     "subscription_cancelled",
     "subscription_expired",
     "subscription_resumed",
+    "subscription_payment_failed",
 }
 
 # Map Lemon Squeezy subscription status → our status
 EVENT_STATUS_OVERRIDE = {
-    "subscription_cancelled": "cancelled",
-    "subscription_expired":   "expired",
-    "subscription_resumed":   "active",
+    "subscription_cancelled":      "cancelled",
+    "subscription_expired":        "expired",
+    "subscription_resumed":        "active",
+    "subscription_payment_failed": "past_due",
 }
 
 
@@ -123,6 +125,10 @@ async def lemonsqueezy_webhook(
 
     data       = payload.get("data", {})
     attributes = data.get("attributes", {})
+    # user_id is round-tripped through LS checkout custom data (set by
+    # /billing/checkout). Present for in-app purchases; absent otherwise.
+    custom_data = payload.get("meta", {}).get("custom_data", {}) or {}
+    user_id     = custom_data.get("user_id") or None
 
     subscription_id = str(data.get("id", ""))
     customer_id     = str(attributes.get("customer_id", ""))
@@ -148,7 +154,8 @@ async def lemonsqueezy_webhook(
         status=status,
         tier=tier,
         current_period_end=period_end,
+        user_id=user_id,
     )
 
-    print(f"[webhooks] {event_name} → {customer_email} ({tier}, {status})")
+    print(f"[webhooks] {event_name} → {customer_email} ({tier}, {status}, user={user_id})")
     return JSONResponse({"received": True, "handled": True, "event": event_name})

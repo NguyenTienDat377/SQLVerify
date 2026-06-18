@@ -22,6 +22,7 @@ Returns JSON:
   }
 """
 
+import os
 import time
 import markdown
 import nh3
@@ -39,7 +40,10 @@ from core.models import VerificationResult
 
 from explainer.explain import explain_result
 
-from db.repositories.verification_runs import save_run, get_recent_runs, update_explanation
+from db.repositories.verification_runs import (
+    save_run, get_recent_runs, update_explanation, count_runs_this_month,
+)
+from db.repositories.subscriptions import get_active_subscription_by_user
 
 
 templates = Jinja2Templates(directory="web/templates")
@@ -86,6 +90,52 @@ MAX_TIMEOUT_MS = 120_000      # hard ceiling for caller-supplied CI/CD timeouts
 # solve can run up to MAX_TIMEOUT_MS), so an unthrottled endpoint lets one
 # client pin a worker. Shared by both surfaces; tune to taste.
 VERIFY_RATE_LIMIT = "30/minute"
+
+# Free-tier quota: verification runs per calendar month before an upgrade is
+# required. Any active paid subscription lifts the cap entirely.
+FREE_TIER_MONTHLY_LIMIT = int(os.getenv("FREE_TIER_MONTHLY_LIMIT", "100"))
+PAID_TIERS = {"individual", "team"}
+
+
+async def _enforce_quota(request: Request):
+    """Free-tier gate. Returns a 402 response when an unpaid user has hit the
+    monthly limit, else None (allowed). Fails OPEN — a billing/DB hiccup must
+    never block a paying or free user mid-work.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return None  # unauthenticated requests are gated by JWTMiddleware, not metered
+
+    try:
+        sub = await get_active_subscription_by_user(user_id)
+        if sub and sub.get("tier") in PAID_TIERS:
+            return None  # active paid plan → unlimited
+        used = await count_runs_this_month(user_id)
+    except Exception as e:  # noqa: BLE001 — fail open
+        logger.warning("Quota check failed (allowing through): {err}", err=e)
+        return None
+
+    if used < FREE_TIER_MONTHLY_LIMIT:
+        return None
+
+    if "hx-request" in request.headers:
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/upgrade_prompt.html",
+            context={"limit": FREE_TIER_MONTHLY_LIMIT},
+            status_code=402,
+        )
+    return JSONResponse(
+        status_code=402,
+        content={
+            "error": "quota_exceeded",
+            "detail": (
+                f"Free tier limit of {FREE_TIER_MONTHLY_LIMIT} verifications/month "
+                "reached. Upgrade to continue."
+            ),
+            "limit": FREE_TIER_MONTHLY_LIMIT,
+        },
+    )
 
 
 async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_name: str) -> str:
@@ -147,6 +197,11 @@ async def verify_equivalence(
 
     Returns a counterexample database if the queries diverge.
     """
+    # Free-tier gate before any expensive work.
+    gate = await _enforce_quota(request)
+    if gate is not None:
+        return gate
+
     # Read inputs, falling back to file if text is empty
     ddl_sql  = await _get_content(schema_file, schema_text, "schema_file")
     v1_sql   = await _get_content(query_v1_file, query_v1_text, "query_v1")
@@ -250,6 +305,12 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
             status_code=400,
             detail=f"bound must be <= {MAX_BOUND}.",
         )
+
+    # Free-tier gate (JSON 402) — applies to API-key clients too, so the limit
+    # isn't bypassable via /api/verify/text.
+    gate = await _enforce_quota(request)
+    if gate is not None:
+        return gate
 
     # Clamp to the hard ceiling rather than rejecting — a CI client asking for a
     # generous timeout should get the ceiling, not a 400.

@@ -29,12 +29,19 @@ async def upsert_subscription(
     status: str,
     tier: str,
     current_period_end: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Insert or update a subscription row keyed on subscription_id.
 
     Called on every Lemon Squeezy subscription_* webhook event.
     Uses upsert so the same subscription_id is never duplicated.
+
+    Args:
+        user_id: SQLVerify user the subscription belongs to, passed through LS
+                 checkout custom data (meta.custom_data.user_id). Used to resolve
+                 a user's plan/quota; may be None for purchases made outside the
+                 in-app /billing/checkout flow.
 
     Returns:
         UUID of the row, or None on failure.
@@ -51,6 +58,10 @@ async def upsert_subscription(
         "current_period_end": current_period_end,
         "updated_at":         "now()",
     }
+    # Only set user_id when we actually have one, so a later webhook without
+    # custom data (e.g. subscription_updated) doesn't blank an existing link.
+    if user_id:
+        row["user_id"] = user_id
 
     try:
         client = get_client()
@@ -88,4 +99,34 @@ async def get_active_subscription(email: str) -> Optional[dict]:
         return response.data[0] if response.data else None
     except Exception as e:
         print(f"[db] Failed to get subscription for {email}: {e}")
+        return None
+
+
+async def get_active_subscription_by_user(user_id: str) -> Optional[dict]:
+    """
+    Fetch the most recent active subscription for a user by user_id.
+
+    This is the canonical plan/quota lookup — in-app checkout stamps the
+    subscription with the buyer's user_id (via LS custom data), so plan state
+    resolves consistently across both the session and API-key auth paths.
+
+    Returns:
+        Subscription dict with 'tier' and 'status', or None if not found.
+    """
+    if not user_id:
+        return None
+    try:
+        client = get_client()
+        response = (
+            client.table("subscriptions")
+            .select("id, tier, status, current_period_end, variant_id, subscription_id")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+    except Exception as e:
+        print(f"[db] Failed to get subscription for user {user_id}: {e}")
         return None
