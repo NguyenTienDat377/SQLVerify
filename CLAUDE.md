@@ -38,8 +38,8 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 
 ```
 SQLVerify/
-├── main.py                         # FastAPI app entry point
-├── config.py                       # ✅ DONE — Pydantic Settings (reads .env)
+├── main.py                         # FastAPI app entry point — routers, pinned CORS, rate-limit + JWT middleware
+│                                   #   (config is read via os.getenv per-module; there is no config.py)
 ├── CLAUDE.md                       # This file
 ├── .env                            # Never commit — secrets live here
 ├── .env.example                    # Commit this — placeholder keys only
@@ -57,15 +57,17 @@ SQLVerify/
 │
 ├── explainer/
 │   ├── __init__.py                 # ✅ DONE — empty
-│   ├── explain.py                  # ✅ DONE — explain_result() public API: VerificationResult → plain-English string
-│   ├── providers.py                # ✅ DONE — LLMProvider ABC + Claude/Gemini/GPT implementations + get_provider()
+│   ├── explain.py                  # ✅ DONE — explain_result() public API (guarded by the circuit breaker)
+│   ├── providers.py                # ✅ DONE — LLMProvider ABC + Claude/Gemini/GPT (httpx errors → ExplainerError)
+│   ├── circuit_breaker.py          # ✅ DONE — async circuit breaker: fail fast when the LLM provider is down
 │   └── prompts.py                  # ✅ DONE — EQUIVALENCE_EXPLANATION and CONSTRAINT_EXPLANATION prompt templates
 │
 ├── api/
 │   ├── __init__.py
 │   ├── verify.py                   # ✅ DONE — all endpoints (see "What is DONE > api/" below)
-│   ├── auth.py                     # ✅ DONE — GitHub OAuth + magic-link + session cookies + logout
+│   ├── auth.py                     # ✅ DONE — GitHub OAuth + magic-link + session cookies + logout (POST)
 │   ├── keys.py                     # ✅ DONE — per-user API key CRUD (HTMX partials)
+│   ├── billing.py                  # ✅ DONE — Lemon Squeezy checkout + customer portal redirects
 │   └── webhooks.py                 # ✅ DONE — Lemon Squeezy subscription webhooks
 │
 ├── db/
@@ -73,8 +75,8 @@ SQLVerify/
 │   ├── client.py                   # ✅ DONE — Supabase client (uses service key)
 │   └── repositories/
 │       ├── __init__.py
-│       ├── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation()
-│       ├── subscriptions.py        # ✅ DONE — upsert_subscription(), get_active_subscription()
+│       ├── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation(), count_runs_this_month()
+│       ├── subscriptions.py        # ✅ DONE — upsert_subscription(), get_active_subscription(), get_active_subscription_by_user()
 │       └── api_keys.py             # ✅ DONE — create/list/revoke/resolve per-user API keys (sha256-hashed)
 │
 ├── auth/                           # ✅ DONE — JWTMiddleware (Supabase JWKS) + per-user API-key path
@@ -83,13 +85,18 @@ SQLVerify/
 └── web/
     ├── static/
     │   └── css/
-    │       └── style.css
+    │       └── styles.css
     └── templates/
-        ├── base.html               # ✅ DONE
+        ├── base.html               # ✅ DONE — app shell + topbar (API Keys / Billing / Sign out)
+        ├── landing.html            # ✅ DONE — marketing page + GitHub + magic-link sign-in
         ├── verify.html             # ✅ DONE — SQL Input tab + History tab (HTMX wired)
+        ├── pricing.html            # ✅ DONE — plans; CTAs → /billing/checkout
+        ├── keys.html               # ✅ DONE — per-user API key management
         └── partials/
-            ├── result.html         # ✅ DONE — HTMX partial: equivalent/divergent/error/unknown badges + counterexample table + Explain button
-            └── history.html        # ✅ DONE — HTMX partial: list of past runs, click to replay result
+            ├── result.html         # ✅ DONE — equivalent/divergent/error/unknown badges + counterexample + Explain
+            ├── history.html        # ✅ DONE — list of past runs, click to replay
+            ├── api_keys.html        # ✅ DONE — API key list + show-once raw key banner
+            └── upgrade_prompt.html # ✅ DONE — 402 free-tier upgrade prompt (HTMX)
 
 ---
 
@@ -110,63 +117,99 @@ SQLVerify/
   - `OpenAIProvider` (GPT)
   - `GoogleProvider` (Gemini)
   - `get_provider()` factory — reads `EXPLAINER_PROVIDER` env var, returns right instance
-- `explain.py` — `explain_result(result, sql_v1, sql_v2, provider_name=None) -> str`: public async function that formats the prompt and calls the provider. Returns `""` for non-divergent results. Catches `ExplainerError` and returns a fallback string — never breaks the caller.
+- `explain.py` — `explain_result(result, sql_v1, sql_v2, provider_name=None) -> str`: public async function that formats the prompt and calls the provider **through a shared circuit breaker**. Returns `""` for non-divergent results. Catches `ExplainerError`/open-circuit and returns a fallback string — never breaks the caller.
+- `circuit_breaker.py` — `CircuitBreaker`: a per-process async 3-state breaker (closed→open→half_open). After `EXPLAINER_BREAKER_THRESHOLD` (default 3) consecutive failures it short-circuits for `EXPLAINER_BREAKER_RESET_S` (default 30s), so an LLM outage stops burning credits/latency instead of retrying. Providers wrap `httpx` errors as `ExplainerError` so an outage degrades gracefully (a latent crash that pre-dated this).
 
 ### api/
-- `verify.py` — all endpoints:
-  - `POST /api/verify` — multipart form (`schema_file` + `query_v1` + `query_v2` + optional `explain=true`), HTMX-aware. Calls `explain_result()` only when `explain=true` and status is divergent.
-  - `POST /api/explain/{run_id}` — on-demand LLM explanation for a saved run. Fetches from Supabase, calls `explain_result()`, persists via `update_explanation()`, returns HTML fragment for HTMX swap. Returns cached explanation if already generated.
-  - `POST /api/verify/text` — JSON body for CI/CD pipelines (always calls explainer on divergent results)
-  - `GET /api/history` — returns `history.html` partial with list of past runs
-  - `GET /api/history/{run_id}` — returns `result.html` partial replaying a specific run
+- `verify.py` — verification endpoints, each per-IP rate-limited (`VERIFY_RATE_LIMIT`,
+  default 30/min) and free-tier quota-gated (`_enforce_quota`, fails open):
+  - `POST /api/verify` — multipart form (`schema_file` + `query_v1` + `query_v2` + optional `explain=true`), HTMX-aware. Web timeout default 15s (cap 60s). Calls `explain_result()` only when `explain=true` and status is divergent. Attaches `user_id` to the saved run.
+  - `POST /api/explain/{run_id}` — on-demand LLM explanation for a saved run. **Ownership-checked** (`row.user_id != requester → 404`). Fetches, calls `explain_result()`, persists, returns HTML fragment. Returns cached explanation if present.
+  - `POST /api/verify/text` — JSON body for CI/CD pipelines. CI timeout default 60s (clamped to 120s). Always explains divergent results; attaches `user_id`; quota-gated (JSON 402).
+  - `GET /api/history` — `history.html` partial, scoped to the requester's `user_id`.
+  - `GET /api/history/{run_id}` — `result.html` partial replaying a run; **ownership-checked** (404 on mismatch).
   - `GET /api/verify/health` — liveness check
+- `auth.py` — `/auth/login` (GitHub OAuth), `/auth/magic-link` (Supabase OTP email),
+  `/auth/callback` + `/auth/set-session` (implicit-flow tokens → HttpOnly cookies),
+  `/auth/logout` (**POST**, clears cookies).
+- `keys.py` — `/api/keys` create/list + `/api/keys/{id}/revoke` (session-protected, HTMX).
+- `billing.py` — `/billing/checkout?plan=…` (LS buy-link + `user_id` custom data) and
+  `/billing/portal` (fresh signed LS portal URL via the LS API).
+- `webhooks.py` — `POST /api/webhooks/lemonsqueezy` (HMAC-verified) → `upsert_subscription`,
+  handling `subscription_created/updated/cancelled/expired/resumed/payment_failed`.
+
+### auth/
+- `middleware.py` — `JWTMiddleware`: authenticates every non-public request via **two
+  paths** and injects `request.state.user_id` (+ `user_email`, `auth_method`):
+  - browser session — Supabase JWT (`sb-access-token` cookie or `Bearer <jwt>`),
+    verified against Supabase JWKS with issuer + audience checks;
+  - CI/API client — per-user API key (`Bearer sqv_…` or `X-API-Key`), resolved via the
+    `api_keys` table with a ~60s per-process lookup cache.
 
 ### db/
-- `client.py` — Supabase client using service key
-- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`
-- Supabase `verification_runs` table is set up with RLS enabled
+- `client.py` — Supabase client using the service key (bypasses RLS; repos scope by `user_id` in code)
+- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()`
+- `repositories/subscriptions.py` — `upsert_subscription()`, `get_active_subscription()`, `get_active_subscription_by_user()`
+- `repositories/api_keys.py` — `create/list/revoke/resolve` per-user API keys (sha256-hashed, shown once)
+- Supabase tables `verification_runs`, `subscriptions`, `api_keys` with RLS enabled
+  (Migrations #1–#3 below; the service key intentionally bypasses RLS for server writes)
 
 ### web/
-- `verify.html` — two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS function handles tab switching.
-- `partials/result.html` — renders `VerificationResult` with status badge + counterexample table + divergence reason
-- `partials/history.html` — renders list of past runs with timestamp, status badge, query preview, and "View" button
+- `landing.html` — marketing page; GitHub sign-in + magic-link email form (HTMX)
+- `verify.html` — two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS handles tabs.
+- `pricing.html` — plan cards; CTAs point at `/billing/checkout?plan=…`
+- `keys.html` — API key management (create form + list)
+- `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
+- `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
+- `partials/api_keys.html` — key list + the show-once raw-key banner
+- `partials/upgrade_prompt.html` — 402 free-tier upgrade prompt
 
 ---
 
 ## What is NOT BUILT (next tasks)
 
-### 1. `auth/` — Supabase auth middleware ← BUILD THIS NEXT
-Not started. Low priority for V1 demo.
+### 1. `core/constraint_check.py` — Direction 2: single-query constraint checking
+File exists but is empty. Intended to check whether a single query satisfies schema constraints (FK, PK, NOT NULL). Not required for the equivalence engine.
 
-### 2. `core/constraint_check.py` — Direction 2: single-query constraint checking
-File exists but is empty. Intended to check whether a single query satisfies schema constraints (FK, PK, NOT NULL). Not required for V1 equivalence demo.
-
-### 3. `core/witness.py` — Witness/counterexample generation helpers
+### 2. `core/witness.py` — Witness/counterexample generation helpers
 File exists but is empty. Intended to clean up and format Z3 model output into human-readable counterexample databases. Currently handled inline in `equivalence.py`.
 
-### 4. Tests
-`tests/smoke_test.py` exists — 28 end-to-end checks over `check_equivalence()`:
-known equivalent/divergent pairs (incl. LEFT/RIGHT JOIN ON-vs-WHERE cases) and
-fail-closed rejection of unsupported constructs. Run with
-`.venv/bin/python tests/smoke_test.py` (no pytest required, but pytest-compatible).
+### 3. Scaling (memory: scaling-architecture-roadmap)
+Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache,
+shared-state rate-limiter/breaker, poison-job watchdog. Not started — see the
+scaling roadmap memory.
 
-`tests/paper_cases_test.py` — 18 regression tests derived from the VeriEQL
-paper (`3649849.pdf`): IC-PK composite keys, IC-FK/IC-NN-dependent
-equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
-bag multiplicity. Same runner style as the smoke test.
+---
 
-`tests/differential_test.py` — differential fuzzing: random V1-subset query
-pairs verified by Z3, then cross-checked against concrete SQLite execution
-(every "equivalent" verdict attacked with sampled databases within the bound;
-every "divergent" witness replayed). Run with
-`.venv/bin/python tests/differential_test.py [--seeds N --bound B]`.
+## Tests
 
-`docs/encoding_audit.md` — rule-by-rule audit of the Z3 encoding against the
-paper (Figs 8–12, Eqns 1–2), with verdicts and the audit campaign results.
+All suites are standalone (no pytest required, but pytest-compatible):
+`.venv/bin/python tests/<file>.py`.
 
-Still missing:
-- `core/ddl_parser.py` — DDL parsing edge cases
-- `api/verify.py` — endpoint smoke tests
+- `tests/smoke_test.py` — 32 end-to-end checks over `check_equivalence()`:
+  equivalent/divergent pairs (incl. LEFT/RIGHT ON-vs-WHERE, multi-table INNER
+  joins, join reordering, GROUP BY on a joined column) and fail-closed rejection
+  of unsupported constructs.
+- `tests/paper_cases_test.py` — 21 regression tests from the VeriEQL paper
+  (`docs/references/veriEQL-2024.pdf`): IC-PK composite keys, IC-FK/IC-NN
+  equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
+  bag multiplicity, plus multi-table-join chains.
+- `tests/differential_test.py` — differential fuzzing: random query pairs (incl.
+  3-table INNER chains) verified by Z3, then cross-checked against concrete
+  SQLite (every "equivalent" attacked with sampled DBs within the bound; every
+  "divergent" witness replayed). `--seeds N --bound B`.
+- `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeout
+  defaults/clamp, persistence, divergent explain) with Supabase/LLM stubbed.
+- `tests/api_keys_test.py` — key hashing + the dual auth path (session JWT vs
+  `sqv_` API key) + magic-link OTP call.
+- `tests/circuit_breaker_test.py` — the explainer circuit breaker (trips, short-
+  circuits, half-open recovery).
+- `tests/billing_test.py` — free-tier quota gate, checkout redirect, portal,
+  webhook `payment_failed`.
+- `docs/encoding_audit.md` — rule-by-rule audit of the Z3 encoding vs the paper
+  (Figs 8–12, Eqns 1–2).
+
+Still missing: `core/ddl_parser.py` edge cases.
 
 ---
 
@@ -183,13 +226,19 @@ Still missing:
 | Explainer is on-demand only | The "Explain" button is explicit user action. Never auto-call LLM on every verification — cost and latency. |
 | Supabase for DB + auth | Managed PostgreSQL + built-in auth. No self-hosted infra. Service key stays server-side only, never exposed to frontend. |
 | Render for deployment | Always-on container. NOT Lambda/serverless — Z3 binary is too large for cold starts. |
-| No cross-dialect comparison in V1 | sqlglot supports dialects but encoding dialect-specific semantics in Z3 is non-trivial. Out of scope. |
+| No cross-dialect comparison | sqlglot supports dialects but encoding dialect-specific semantics in Z3 is non-trivial. Out of scope. |
+| Per-surface Z3 timeouts | Web `POST /api/verify` defaults 15s (cap 60s) for a snappy UI; CI `POST /api/verify/text` defaults 60s (clamped to 120s) to favour a verdict over latency. On timeout the result is `unknown` — never a wrong answer. |
+| Per-IP rate limiting (slowapi) | The two solve endpoints are `@limiter.limit`-decorated (default 30/min). Verification is expensive, so an unthrottled endpoint lets one client pin a worker. The `limiter` lives in `api/verify.py`; it is attached to the app + given its 429 handler in `main.py`. |
+| Circuit breaker on LLM calls | `explainer/circuit_breaker.py` fails fast when the provider is down so an outage doesn't burn credits/latency. Per-process state. |
+| Free-tier quota fails **open** | `_enforce_quota` returns the request through on any billing/DB lookup error — a metering hiccup must never block a paying or free user mid-work. |
+| Two auth paths, one `user_id` | Session JWT (browser) **or** per-user API key (CI), both resolved by `JWTMiddleware` into `request.state.user_id`. Access control is enforced in app code (ownership checks + repo `user_id` scoping), **not** RLS — the service key bypasses RLS. |
+| Billing via Lemon Squeezy (MoR) | Merchant of Record handles global VAT; we never touch card data. Plan/quota resolve by `user_id`, stamped onto the subscription via LS checkout custom data. Rate-limiter / breaker / API-key cache are per-process — move to shared state when scaling to multiple workers. |
 
 ---
 
-## V1 known limitations
+## Known limitations (supported SQL subset)
 
-Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored.
+Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored. The subset is widening over time (see the SQL-subset-expansion roadmap memory); anything not yet supported stays fail-closed.
 
 - Any number of INNER joins per query, OR exactly one LEFT/RIGHT join. An outer join cannot be combined with another join (multi-table joins must be INNER). No FULL OUTER, CROSS, or self-joins. Each JOIN ON must be a single column equality. Note: the INNER join bag is `bound^n` over n tables, so deep chains (n≥4) get slower and may return `unknown` on timeout — the bound is never silently lowered.
 - No CTEs (`WITH` clauses)

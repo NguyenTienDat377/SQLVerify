@@ -30,7 +30,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
 _PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
-_PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health", "/pricing"}
+_PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health", "/pricing", "/terms", "/privacy"}
 
 _jwks_client: PyJWKClient | None = None
 

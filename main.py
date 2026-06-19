@@ -145,6 +145,26 @@ async def pricing_page(request: Request):
     )
 
 
+@app.get("/terms")
+async def terms_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="terms.html",
+        context={"user_email": user_email},
+    )
+
+
+@app.get("/privacy")
+async def privacy_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="privacy.html",
+        context={"user_email": user_email},
+    )
+
+
 @app.get("/keys")
 async def keys_page(request: Request):
     # Protected by JWTMiddleware (not a public path) — user_id is always set here.

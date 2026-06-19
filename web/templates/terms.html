@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Terms of Service — SQLVerify{% endblock %}
+{% block content %}
+<style>
+  .legal-page { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem 4rem; line-height: 1.7; }
+  .legal-page h1 { font-size: 1.75rem; margin-bottom: 0.25rem; }
+  .legal-page .updated { color: var(--text-secondary, #6b7280); font-size: 0.875rem; margin-bottom: 2rem; }
+  .legal-page h2 { font-size: 1.15rem; margin-top: 2rem; margin-bottom: 0.5rem; }
+  .legal-page p, .legal-page li { font-size: 0.95rem; }
+  .legal-page ul { padding-left: 1.25rem; }
+  .legal-page a { color: inherit; text-decoration: underline; }
+</style>
+<div class="legal-page">
+  <h1>Terms of Service</h1>
+  <p class="updated">Last updated: June 20, 2026</p>
+
+  <p>
+    These Terms of Service ("Terms") govern your access to and use of SQLVerify
+    (the "Service"), operated by Dat Nguyen, an individual based in Hanoi,
+    Vietnam ("we", "us", "our"). By creating an account or using the Service,
+    you agree to these Terms. If you do not agree, do not use the Service.
+  </p>
+
+  <h2>1. What SQLVerify is</h2>
+  <p>
+    SQLVerify is a formal verification tool that uses SMT (Z3) solving to check
+    whether two SQL queries are semantically equivalent given a database
+    schema, and to generate a counterexample database when they are not. It is
+    a decision-support tool intended to help engineers review SQL before it
+    ships — it is not a substitute for your own testing, code review, or
+    judgment.
+  </p>
+
+  <h2>2. Eligibility and accounts</h2>
+  <p>
+    You must be at least 18 years old, or the age of legal majority in your
+    jurisdiction, to use the Service. You are responsible for maintaining the
+    confidentiality of your account credentials and any API keys you generate,
+    and for all activity that occurs under your account. Notify us promptly at
+    <a href="mailto:dat@sqlverify.com">dat@sqlverify.com</a> if you suspect
+    unauthorized use.
+  </p>
+
+  <h2>3. Plans, billing, and free tier limits</h2>
+  <p>
+    The Service offers a free tier (subject to a monthly verification-run
+    limit, currently 100 runs per calendar month) and paid subscription plans
+    (Individual and Team). Paid subscriptions are billed in advance on a
+    recurring basis and processed by Lemon Squeezy, our payment processor and
+    Merchant of Record. We do not collect or store your payment card details.
+  </p>
+  <p>
+    You may cancel a paid subscription at any time through the billing portal;
+    cancellation takes effect at the end of the current billing period. Except
+    where required by law or Lemon Squeezy's own refund policy, payments are
+    non-refundable. We may change pricing for future billing periods with
+    reasonable notice.
+  </p>
+
+  <h2>4. Your content</h2>
+  <p>
+    "Your Content" means the SQL schemas, queries, and any other data you
+    submit to the Service. You retain ownership of Your Content. You grant us
+    a limited license to process, store, and transmit Your Content solely to
+    operate and improve the Service — including, when you explicitly request
+    an explanation, sending the relevant query and counterexample data to a
+    third-party AI provider as described in our Privacy Policy.
+  </p>
+  <p>
+    You are responsible for ensuring you have the right to submit Your
+    Content, and for not submitting data you are not authorized to share
+    (for example, schemas or queries containing real customer personal data
+    you don't have rights to process through a third party).
+  </p>
+
+  <h2>5. Acceptable use</h2>
+  <p>You agree not to:</p>
+  <ul>
+    <li>Use the Service for any unlawful purpose, or to submit malicious, infringing, or abusive content;</li>
+    <li>Attempt to bypass rate limits, free-tier quotas, or authentication via multiple accounts or other circumvention;</li>
+    <li>Reverse-engineer, decompile, or attempt to extract the underlying verification logic or models of the Service, beyond what is permitted by the open-source license governing the underlying engine, where applicable;</li>
+    <li>Interfere with or disrupt the integrity or performance of the Service or its infrastructure;</li>
+    <li>Resell or sublicense access to the Service without our written agreement.</li>
+  </ul>
+
+  <h2>6. Important limitations of the verification engine</h2>
+  <p>
+    The Service's equivalence checking is sound only within the supported SQL
+    subset and the configured verification bound described in our
+    documentation. Queries or constructs outside that subset are rejected
+    rather than silently ignored, but the supported subset itself has known
+    limitations (for example, certain joins, window functions, and subqueries
+    are not yet supported). An "equivalent" verdict is a strong signal, not an
+    absolute guarantee for every possible database state — you remain
+    responsible for your own testing and validation before deploying SQL
+    changes to production.
+  </p>
+
+  <h2>7. Disclaimer of warranties</h2>
+  <p>
+    THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OF
+    ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF
+    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT. WE
+    DO NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR THAT
+    VERIFICATION RESULTS WILL CATCH EVERY POSSIBLE DEFECT IN YOUR SQL.
+  </p>
+
+  <h2>8. Limitation of liability</h2>
+  <p>
+    TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE WILL NOT BE LIABLE FOR ANY
+    INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY
+    LOSS OF DATA, REVENUE, OR PROFITS, ARISING FROM YOUR USE OF THE SERVICE.
+    OUR TOTAL LIABILITY FOR ANY CLAIM ARISING OUT OF THESE TERMS OR THE
+    SERVICE WILL NOT EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID US IN THE
+    12 MONTHS PRECEDING THE CLAIM, OR (B) USD 100.
+  </p>
+
+  <h2>9. Indemnification</h2>
+  <p>
+    You agree to indemnify and hold us harmless from any claims, damages, or
+    expenses (including reasonable legal fees) arising from your breach of
+    these Terms, your misuse of the Service, or Your Content.
+  </p>
+
+  <h2>10. Termination</h2>
+  <p>
+    We may suspend or terminate your access to the Service if you violate
+    these Terms, or for any other reason with reasonable notice where
+    practicable. You may stop using the Service at any time. Sections that by
+    their nature should survive termination (including Sections 7, 8, and 9)
+    will survive.
+  </p>
+
+  <h2>11. Changes to these Terms</h2>
+  <p>
+    We may update these Terms from time to time. We will update the "Last
+    updated" date above when we do. Continued use of the Service after changes
+    take effect constitutes acceptance of the revised Terms.
+  </p>
+
+  <h2>12. Governing law</h2>
+  <p>
+    These Terms are governed by the laws of Vietnam, without regard to
+    conflict-of-law principles. Any dispute arising out of these Terms or the
+    Service will be subject to the exclusive jurisdiction of the competent
+    courts of Vietnam.
+  </p>
+
+  <h2>13. Contact</h2>
+  <p>
+    Questions about these Terms can be sent to
+    <a href="mailto:dat@sqlverify.com">dat@sqlverify.com</a>.
+  </p>
+</div>
+{% endblock %}
