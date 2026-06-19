@@ -224,3 +224,7 @@ This means: if you run SQLVerify as a network service, you must make your modifi
 ## Contributing
 
 Issues and PRs are welcome. If you're fixing a bug in the Z3 encoding layer (`core/`), please include a test case — a known-divergent query pair that previously passed as equivalent.
+
+## Acknowledgments
+
+SQLVerify's verification engine is built on academic research — see [NOTICE.md](NOTICE.md) for citations and licensing.
