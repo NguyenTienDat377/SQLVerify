@@ -257,6 +257,35 @@ h1, h2, h3, h4 {
   color: var(--text-secondary);
 }
 
+.form-input {
+  width: 100%;
+  background-color: rgba(24, 24, 27, 0.6);
+  border: 1px solid var(--panel-border);
+  color: var(--text-primary);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.form-input:hover {
+  border-color: var(--text-secondary);
+  background-color: rgba(39, 39, 42, 0.8);
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2), 0 4px 12px rgba(0, 0, 0, 0.2);
+  background-color: var(--panel-bg);
+  transform: translateY(-1px);
+}
+
+.form-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
 .form-select, .form-range {
   width: 100%;
   background-color: var(--panel-bg);

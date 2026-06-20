@@ -41,6 +41,25 @@ from db.repositories.projects import list_projects
 
 setup_logging()
 
+# Sentry — error tracking only (no metrics/dashboards; see CLAUDE.md health
+# monitoring decision). A no-op when SENTRY_DSN is unset, so local dev and tests
+# run untouched. The FastAPI integration auto-captures unhandled exceptions that
+# propagate through ServerErrorMiddleware (our custom 500 handler re-raises), so
+# the latent crash-class bugs surface with stack traces. traces_sample_rate is
+# low to keep performance-monitoring cost down — bump it if you want APM later.
+_SENTRY_DSN = os.getenv("SENTRY_DSN")
+if _SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
+        release="sqlverify@0.1.0",
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        send_default_pii=False,
+    )
+    logger.info("Sentry initialized (env={})", os.getenv("SENTRY_ENVIRONMENT", "production"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
