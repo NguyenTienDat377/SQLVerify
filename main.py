@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
@@ -31,10 +32,12 @@ from loguru import logger
 from api.verify import router as verify_router, limiter
 from api.auth import router as auth_router
 from api.keys import router as keys_router
+from api.projects import router as projects_router
 from api.billing import router as billing_router
 from api.webhooks import router as webhooks_router
 from auth.middleware import JWTMiddleware
 from db.repositories.api_keys import list_api_keys
+from db.repositories.projects import list_projects
 
 setup_logging()
 
@@ -84,6 +87,7 @@ app.add_middleware(JWTMiddleware)
 app.include_router(verify_router)
 app.include_router(auth_router)
 app.include_router(keys_router)
+app.include_router(projects_router)
 app.include_router(billing_router)
 app.include_router(webhooks_router)
 
@@ -93,6 +97,35 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 # Templates
 templates = Jinja2Templates(directory="web/templates")
+
+
+# Custom error pages. 404 (and other HTTP errors) flow through ExceptionMiddleware;
+# unhandled exceptions become 500 via ServerErrorMiddleware. API paths keep JSON;
+# browser pages get the rendered templates.
+# Custom error pages. The 404 handler (keyed by status) is invoked by
+# ExceptionMiddleware when the router finds no match; the 500 handler is wired
+# into ServerErrorMiddleware by Starlette, so it also catches *unhandled*
+# exceptions (a raw `raise`), not just an explicit HTTPException(500). API paths
+# keep JSON; browser pages get the rendered templates.
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc):
+    if request.url.path.startswith("/api"):
+        return JSONResponse(status_code=404, content={"error": "Not Found"})
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request, name="404.html", context={"user_email": user_email}, status_code=404
+    )
+
+
+@app.exception_handler(500)
+async def custom_500_handler(request: Request, exc):
+    logger.exception("Unhandled error on {path}", path=request.url.path)
+    if request.url.path.startswith("/api"):
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request, name="500.html", context={"user_email": user_email}, status_code=500
+    )
 
 
 @app.middleware("http")
@@ -127,11 +160,15 @@ async def root(request: Request):
 
 @app.get("/verify")
 async def verify_page(request: Request):
+    user_id = getattr(request.state, "user_id", None)
     user_email = getattr(request.state, "user_email", None)
+    # Populate the project selector; a new run is tagged with the chosen project
+    # and the History tab filters by it.
+    projects = await list_projects(user_id) if user_id else []
     return templates.TemplateResponse(
         request=request,
         name="verify.html",
-        context={"user_email": user_email},
+        context={"user_email": user_email, "projects": projects},
     )
 
 
@@ -175,4 +212,17 @@ async def keys_page(request: Request):
         request=request,
         name="keys.html",
         context={"user_email": user_email, "keys": keys},
+    )
+
+
+@app.get("/projects")
+async def projects_page(request: Request):
+    # Protected by JWTMiddleware (not a public path) — user_id is always set here.
+    user_id = getattr(request.state, "user_id", None)
+    user_email = getattr(request.state, "user_email", None)
+    projects = await list_projects(user_id) if user_id else []
+    return templates.TemplateResponse(
+        request=request,
+        name="projects.html",
+        context={"user_email": user_email, "projects": projects},
     )

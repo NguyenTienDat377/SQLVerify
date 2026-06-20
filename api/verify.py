@@ -44,6 +44,7 @@ from db.repositories.verification_runs import (
     save_run, get_recent_runs, update_explanation, count_runs_this_month,
 )
 from db.repositories.subscriptions import get_active_subscription_by_user
+from db.repositories.projects import get_project
 
 
 templates = Jinja2Templates(directory="web/templates")
@@ -138,6 +139,17 @@ async def _enforce_quota(request: Request):
     )
 
 
+async def _resolve_project_id(user_id: Optional[str], project_id: Optional[str]) -> Optional[str]:
+    """Return project_id only if it's a non-empty project the user actually owns;
+    otherwise None. Guards against a tampered form/JSON value tagging a run onto
+    another user's project. The ownership lookup only runs when a project_id is
+    supplied, so the common (no-project) path stays on the fast lane."""
+    if not project_id or not user_id:
+        return None
+    owned = await get_project(user_id, project_id)
+    return project_id if owned else None
+
+
 async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_name: str) -> str:
     """Read an uploaded file or text string, prioritizing text if present."""
     if text and text.strip():
@@ -190,6 +202,7 @@ async def verify_equivalence(
     bound:      int = Form(default=3, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
     timeout_ms: int = Form(default=WEB_TIMEOUT_MS, ge=1_000, le=WEB_MAX_TIMEOUT_MS),
     explain:    Optional[str] = Form(default=None, description="Set to 'true' to request AI explanation"),
+    project_id: Optional[str] = Form(default=None, description="Project to attach this run to"),
 ):
     """
     Check whether query_v2 is semantically equivalent to query_v1
@@ -226,7 +239,9 @@ async def verify_equivalence(
         result.explanation = await explain_result(result, v1_sql, v2_sql)
 
     user_id = getattr(request.state, "user_id", None)
-    run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms, user_id=user_id)
+    proj_id = await _resolve_project_id(user_id, project_id)
+    run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms,
+                            user_id=user_id, project_id=proj_id)
 
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
@@ -291,6 +306,7 @@ class VerifyTextRequest(BaseModel):
     dialect:    str = "generic"
     bound:      int = 3
     timeout_ms: int = CICD_TIMEOUT_MS
+    project_id: Optional[str] = None
 
 
 @router.post("/verify/text", response_model=VerifyResponse)
@@ -332,8 +348,9 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
         result.explanation = await explain_result(result, body.sql_v1, body.sql_v2)
 
     user_id = getattr(request.state, "user_id", None)
+    proj_id = await _resolve_project_id(user_id, body.project_id)
     await save_run(result, body.ddl_sql, body.sql_v1, body.sql_v2,
-                   body.dialect, duration_ms, user_id=user_id)
+                   body.dialect, duration_ms, user_id=user_id, project_id=proj_id)
 
     return _result_to_response(result)
 
@@ -356,7 +373,9 @@ async def health():
 @router.get("/history")
 async def history(request: Request):
     user_id = getattr(request.state, "user_id", None)
-    runs = await get_recent_runs(limit=20, user_id=user_id)
+    # Optional project filter from the verify-page selector (empty = all runs).
+    project_id = request.query_params.get("project_id") or None
+    runs = await get_recent_runs(limit=20, user_id=user_id, project_id=project_id)
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
             request=request,

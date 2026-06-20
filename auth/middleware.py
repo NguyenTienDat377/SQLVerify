@@ -26,6 +26,7 @@ from loguru import logger
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Match
 
 from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
@@ -49,6 +50,17 @@ def _is_public(path: str) -> bool:
     if path in _PUBLIC_EXACT:
         return True
     return any(path.startswith(p) for p in _PUBLIC_PREFIXES)
+
+
+def _route_exists(request: Request) -> bool:
+    """True if the path+method matches a registered route. Used so an
+    unauthenticated request to a *non-existent* path falls through to a real
+    404 instead of being blanket-redirected home."""
+    for route in request.app.routes:
+        match, _ = route.matches(request.scope)
+        if match == Match.FULL:
+            return True
+    return False
 
 
 def _decode_token(token: str) -> dict | None:
@@ -137,6 +149,10 @@ class JWTMiddleware(BaseHTTPMiddleware):
                     auth_method = "api_key"
 
         if not user_id:
+            # No such route → let it fall through to a real 404 (rendered by the
+            # 404 handler) rather than redirecting/401-ing on a nonexistent path.
+            if not _route_exists(request):
+                return await call_next(request)
             if request.url.path.startswith("/api"):
                 return JSONResponse(
                     status_code=401,

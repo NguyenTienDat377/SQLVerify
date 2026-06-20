@@ -67,6 +67,7 @@ SQLVerify/
 │   ├── verify.py                   # ✅ DONE — all endpoints (see "What is DONE > api/" below)
 │   ├── auth.py                     # ✅ DONE — GitHub OAuth + magic-link + session cookies + logout (POST)
 │   ├── keys.py                     # ✅ DONE — per-user API key CRUD (HTMX partials)
+│   ├── projects.py                 # ✅ DONE — per-user project CRUD (HTMX partials)
 │   ├── billing.py                  # ✅ DONE — Lemon Squeezy checkout + customer portal redirects
 │   └── webhooks.py                 # ✅ DONE — Lemon Squeezy subscription webhooks
 │
@@ -75,9 +76,10 @@ SQLVerify/
 │   ├── client.py                   # ✅ DONE — Supabase client (uses service key)
 │   └── repositories/
 │       ├── __init__.py
-│       ├── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation(), count_runs_this_month()
+│       ├── verification_runs.py    # ✅ DONE — save_run(), get_recent_runs(), get_run_by_id(), update_explanation(), count_runs_this_month() (save_run/get_recent_runs take project_id)
 │       ├── subscriptions.py        # ✅ DONE — upsert_subscription(), get_active_subscription(), get_active_subscription_by_user()
-│       └── api_keys.py             # ✅ DONE — create/list/revoke/resolve per-user API keys (sha256-hashed)
+│       ├── api_keys.py             # ✅ DONE — create/list/revoke/resolve per-user API keys (sha256-hashed)
+│       └── projects.py             # ✅ DONE — create/list/get/delete per-user projects (owner-scoped)
 │
 ├── auth/                           # ✅ DONE — JWTMiddleware (Supabase JWKS) + per-user API-key path
 │   └── middleware.py
@@ -87,15 +89,19 @@ SQLVerify/
     │   └── css/
     │       └── styles.css
     └── templates/
-        ├── base.html               # ✅ DONE — app shell + topbar (API Keys / Billing / Sign out)
+        ├── base.html               # ✅ DONE — app shell + topbar (Projects / API Keys / Billing / Sign out) + Terms/Privacy footer ({% block title %})
         ├── landing.html            # ✅ DONE — marketing page + GitHub + magic-link sign-in
-        ├── verify.html             # ✅ DONE — SQL Input tab + History tab (HTMX wired)
+        ├── verify.html             # ✅ DONE — project selector + SQL Input tab + History tab (HTMX wired)
         ├── pricing.html            # ✅ DONE — plans; CTAs → /billing/checkout
         ├── keys.html               # ✅ DONE — per-user API key management
+        ├── projects.html           # ✅ DONE — per-user project management (create/list/delete)
+        ├── terms.html              # ✅ DONE — Terms of Service (public, no auth)
+        ├── privacy.html            # ✅ DONE — Privacy Policy (public, no auth)
         └── partials/
             ├── result.html         # ✅ DONE — equivalent/divergent/error/unknown badges + counterexample + Explain
             ├── history.html        # ✅ DONE — list of past runs, click to replay
             ├── api_keys.html        # ✅ DONE — API key list + show-once raw key banner
+            ├── projects.html        # ✅ DONE — project list + delete + inline error/empty states
             └── upgrade_prompt.html # ✅ DONE — 402 free-tier upgrade prompt (HTMX)
 
 ---
@@ -123,16 +129,17 @@ SQLVerify/
 ### api/
 - `verify.py` — verification endpoints, each per-IP rate-limited (`VERIFY_RATE_LIMIT`,
   default 30/min) and free-tier quota-gated (`_enforce_quota`, fails open):
-  - `POST /api/verify` — multipart form (`schema_file` + `query_v1` + `query_v2` + optional `explain=true`), HTMX-aware. Web timeout default 15s (cap 60s). Calls `explain_result()` only when `explain=true` and status is divergent. Attaches `user_id` to the saved run.
+  - `POST /api/verify` — multipart form (`schema_file` + `query_v1` + `query_v2` + optional `explain=true`, optional `project_id`), HTMX-aware. Web timeout default 15s (cap 60s). Calls `explain_result()` only when `explain=true` and status is divergent. Attaches `user_id` and an **ownership-validated** `project_id` (`_resolve_project_id` drops a foreign/tampered id) to the saved run.
   - `POST /api/explain/{run_id}` — on-demand LLM explanation for a saved run. **Ownership-checked** (`row.user_id != requester → 404`). Fetches, calls `explain_result()`, persists, returns HTML fragment. Returns cached explanation if present.
-  - `POST /api/verify/text` — JSON body for CI/CD pipelines. CI timeout default 60s (clamped to 120s). Always explains divergent results; attaches `user_id`; quota-gated (JSON 402).
-  - `GET /api/history` — `history.html` partial, scoped to the requester's `user_id`.
+  - `POST /api/verify/text` — JSON body for CI/CD pipelines (optional `project_id`). CI timeout default 60s (clamped to 120s). Always explains divergent results; attaches `user_id` + ownership-validated `project_id`; quota-gated (JSON 402).
+  - `GET /api/history` — `history.html` partial, scoped to the requester's `user_id`; optional `project_id` query param narrows to one project (empty = all runs).
   - `GET /api/history/{run_id}` — `result.html` partial replaying a run; **ownership-checked** (404 on mismatch).
   - `GET /api/verify/health` — liveness check
 - `auth.py` — `/auth/login` (GitHub OAuth), `/auth/magic-link` (Supabase OTP email),
   `/auth/callback` + `/auth/set-session` (implicit-flow tokens → HttpOnly cookies),
   `/auth/logout` (**POST**, clears cookies).
 - `keys.py` — `/api/keys` create/list + `/api/keys/{id}/revoke` (session-protected, HTMX).
+- `projects.py` — `/api/projects` create/list + `/api/projects/{id}/delete` (session-protected, HTMX); all owner-scoped.
 - `billing.py` — `/billing/checkout?plan=…` (LS buy-link + `user_id` custom data) and
   `/billing/portal` (fresh signed LS portal URL via the LS API).
 - `webhooks.py` — `POST /api/webhooks/lemonsqueezy` (HMAC-verified) → `upsert_subscription`,
@@ -148,21 +155,27 @@ SQLVerify/
 
 ### db/
 - `client.py` — Supabase client using the service key (bypasses RLS; repos scope by `user_id` in code)
-- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()`
+- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()` (`save_run`/`get_recent_runs` accept `project_id`)
 - `repositories/subscriptions.py` — `upsert_subscription()`, `get_active_subscription()`, `get_active_subscription_by_user()`
 - `repositories/api_keys.py` — `create/list/revoke/resolve` per-user API keys (sha256-hashed, shown once)
-- Supabase tables `verification_runs`, `subscriptions`, `api_keys` with RLS enabled
-  (Migrations #1–#3 below; the service key intentionally bypasses RLS for server writes)
+- `repositories/projects.py` — `create/list/get/delete` per-user projects, all scoped by `owner_id` (the `get_project` ownership check also backs run tagging)
+- Supabase tables `verification_runs`, `subscriptions`, `api_keys`, `projects` with RLS enabled
+  (Migrations #1–#4 below; the service key intentionally bypasses RLS for server writes)
 
 ### web/
 - `landing.html` — marketing page; GitHub sign-in + magic-link email form (HTMX)
-- `verify.html` — two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS handles tabs.
+- `verify.html` — project selector (`#project-select`) + two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS handles tabs; the form and History tab `hx-include` the selector so a run is tagged with the chosen project and History filters by it.
 - `pricing.html` — plan cards; CTAs point at `/billing/checkout?plan=…`
 - `keys.html` — API key management (create form + list)
+- `projects.html` — project management (create form + list + delete)
+- `terms.html` / `privacy.html` — legal pages, served by public `GET /terms` and `GET /privacy` in `main.py` (in the `JWTMiddleware` public allowlist); linked from the `base.html` footer
 - `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
 - `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
 - `partials/api_keys.html` — key list + the show-once raw-key banner
+- `partials/projects.html` — project list + delete buttons + inline error / empty states
 - `partials/upgrade_prompt.html` — 402 free-tier upgrade prompt
+web/templates/404.html: A custom 404 page that tells the user the page couldn't be found, with a button to return home.
+web/templates/500.html: A custom 500 page indicating an internal server error, also with a button to return home.
 
 ---
 
@@ -422,6 +435,18 @@ ALTER TABLE public.subscriptions
 CREATE INDEX IF NOT EXISTS subscriptions_user_id_idx
     ON public.subscriptions (user_id);
 ```
+
+## Migration #4
+
+Per-user **projects** to group verification runs. Mirrors the api_keys pattern:
+RLS enabled with per-user policies for defense-in-depth, while the service key
+bypasses RLS and the repos scope by `owner_id` in code. `verification_runs`
+gains a nullable `project_id` (FK `ON DELETE SET NULL`, so deleting a project
+keeps its runs but unlinks them). The verify endpoints validate `project_id`
+ownership (`_resolve_project_id`) before tagging a run. Full SQL lives in
+`supabase/migrations/20260620000001_add_project.sql` — `projects` table
+(`owner_id`, `name`, `description`, `UNIQUE (owner_id, name)`) + 4 RLS policies +
+GRANT, then `ALTER TABLE verification_runs ADD COLUMN project_id` + index.
 
 ## Billing (Lemon Squeezy — Merchant of Record)
 

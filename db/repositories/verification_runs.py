@@ -35,6 +35,7 @@ async def save_run(
     dialect: str,
     duration_ms: int,
     user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> Optional[str]:
     """
     Persist a verification run to Supabase.
@@ -47,6 +48,7 @@ async def save_run(
         dialect:     SQL dialect string.
         duration_ms: How long the verification took in milliseconds.
         user_id:     UUID of the authenticated user, or None for anonymous.
+        project_id:  UUID of the project the run belongs to, or None.
 
     Returns:
         UUID of the inserted row, or None on failure.
@@ -65,6 +67,7 @@ async def save_run(
         "explanation":        result.explanation,
         "duration_ms":        duration_ms,
         "user_id":            user_id,
+        "project_id":         project_id,
     }
 
     try:
@@ -81,12 +84,17 @@ async def save_run(
 # Read
 # ---------------------------------------------------------------------------
 
-async def get_recent_runs(limit: int = 20, user_id: Optional[str] = None) -> list[dict]:
+async def get_recent_runs(
+    limit: int = 20,
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> list[dict]:
     """
     Fetch the most recent verification runs for the history panel.
 
     Returns a lightweight list — no full SQL text, just display fields.
     Pass user_id to scope results to a single user (required once RLS is active).
+    Pass project_id to additionally narrow the history to one project.
     """
     try:
         client = get_client()
@@ -98,6 +106,8 @@ async def get_recent_runs(limit: int = 20, user_id: Optional[str] = None) -> lis
         )
         if user_id:
             query = query.eq("user_id", user_id)
+        if project_id:
+            query = query.eq("project_id", project_id)
         response = query.execute()
         return response.data or []
     except Exception as e:

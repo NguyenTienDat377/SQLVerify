@@ -43,10 +43,10 @@ calls: dict[str, list] = {"save_run": [], "explain": [], "check": []}
 
 
 async def _fake_save_run(result, ddl_sql, sql_v1, sql_v2, dialect, duration_ms,
-                         user_id=None):
+                         user_id=None, project_id=None):
     calls["save_run"].append({
         "status": result.status, "ddl": ddl_sql, "v1": sql_v1, "v2": sql_v2,
-        "dialect": dialect, "duration_ms": duration_ms,
+        "dialect": dialect, "duration_ms": duration_ms, "project_id": project_id,
     })
     return "00000000-0000-0000-0000-000000000000"
 

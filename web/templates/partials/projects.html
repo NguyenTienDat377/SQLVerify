@@ -1,0 +1,30 @@
+{% if error %}
+<div class="project-error glass-panel" style="padding: 0.75rem 1rem; margin-bottom: 1rem; border-left: 3px solid var(--danger, #e5484d); color: var(--text-secondary);">
+    {{ error }}
+</div>
+{% endif %}
+
+<ul class="projects-list" style="list-style: none; padding: 0; margin: 0;">
+    {% for p in projects %}
+    <li class="project-row"
+        style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border, #2a2a35);">
+        <div style="flex: 1; min-width: 0;">
+            <div class="project-name" style="font-weight: 600;">{{ p.name }}</div>
+            {% if p.description %}
+            <div class="project-desc" style="color: var(--text-secondary); font-size: 0.85rem;">{{ p.description }}</div>
+            {% endif %}
+        </div>
+        <button class="btn btn-danger"
+                hx-post="/api/projects/{{ p.id }}/delete"
+                hx-target="#projects-panel"
+                hx-swap="innerHTML"
+                hx-confirm="Delete this project? Its verification runs are kept but unlinked.">
+            Delete
+        </button>
+    </li>
+    {% else %}
+    <li class="project-empty" style="color: var(--text-secondary); padding: 0.75rem 0;">
+        No projects yet — create one above.
+    </li>
+    {% endfor %}
+</ul>
