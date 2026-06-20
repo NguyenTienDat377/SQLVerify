@@ -5,7 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SQLVerify - Formal Verification for AI-Generated SQL</title>
     <meta name="description" content="Ensure the correctness of AI-generated SQL queries using formal verification methods. Catch semantic errors before they hit production.">
-    
+
+    <!-- SEO / social preview -->
+    <link rel="canonical" href="{{ site_url }}/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="SQLVerify">
+    <meta property="og:title" content="SQLVerify — Formal Verification for AI-Generated SQL">
+    <meta property="og:description" content="Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter. Z3/SMT proves equivalence or hands you a counterexample database.">
+    <meta property="og:url" content="{{ site_url }}/">
+    <meta property="og:image" content="{{ site_url }}/static/img/og-image.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="SQLVerify — Formal Verification for AI-Generated SQL">
+    <meta name="twitter:description" content="Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter.">
+    <meta name="twitter:image" content="{{ site_url }}/static/img/og-image.png">
+
+    <!-- Structured data: helps search engines understand this is a SaaS dev tool -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "SQLVerify",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Web",
+      "description": "Formal verification for AI-generated SQL. SQLVerify uses Z3/SMT solving to prove two SQL queries are semantically equivalent, or produce a counterexample database where they diverge.",
+      "url": "{{ site_url }}/",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD",
+        "description": "Free tier with 100 verification runs per month"
+      }
+    }
+    </script>
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

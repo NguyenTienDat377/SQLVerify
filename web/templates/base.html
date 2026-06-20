@@ -7,6 +7,23 @@
       {% block title %}SQLVerify - Formal Verification{% endblock %}
     </title>
 
+    <!-- SEO / social preview -->
+    <meta
+      name="description"
+      content="{% block description %}Prove your AI-generated SQL is correct before it ships. SQLVerify uses Z3/SMT formal verification to confirm two queries are equivalent — or hand you a counterexample database.{% endblock %}"
+    />
+    <link rel="canonical" href="{{ site_url }}{% block canonical_path %}{% endblock %}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SQLVerify" />
+    <meta property="og:title" content="{% block og_title %}SQLVerify — Formal Verification for AI-Generated SQL{% endblock %}" />
+    <meta property="og:description" content="{% block og_description %}Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter.{% endblock %}" />
+    <meta property="og:url" content="{{ site_url }}{% block canonical_path_og %}{% endblock %}" />
+    <meta property="og:image" content="{{ site_url }}/static/img/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{% block og_title_tw %}SQLVerify — Formal Verification for AI-Generated SQL{% endblock %}" />
+    <meta name="twitter:description" content="{% block og_description_tw %}Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter.{% endblock %}" />
+    <meta name="twitter:image" content="{{ site_url }}/static/img/og-image.png" />
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from dotenv import load_dotenv
@@ -151,6 +151,52 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     logger.info("SQLVerify shutting down")
+
+
+_SITE_URL = os.getenv("SITE_URL", "https://sqlverify.com").rstrip("/")
+templates.env.globals["site_url"] = _SITE_URL
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    # Crawlers fetch robots.txt from the domain root, so it can't live under
+    # /static. Keep the private/auth/API surface out of the index; everything
+    # else (/, /pricing, /terms, /privacy) is crawlable by default.
+    body = (
+        "User-agent: *\n"
+        "Disallow: /api/\n"
+        "Disallow: /auth/\n"
+        "Disallow: /verify\n"
+        "Disallow: /keys\n"
+        "Disallow: /projects\n"
+        "Disallow: /billing\n"
+        "Disallow: /docs\n"
+        "Disallow: /openapi.json\n"
+        "\n"
+        f"Sitemap: {_SITE_URL}/sitemap.xml\n"
+    )
+    return Response(content=body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    pages = [
+        ("/", "weekly", "1.0"),
+        ("/pricing", "monthly", "0.8"),
+        ("/terms", "yearly", "0.3"),
+        ("/privacy", "yearly", "0.3"),
+    ]
+    urls = "".join(
+        f"<url><loc>{_SITE_URL}{path}</loc>"
+        f"<changefreq>{freq}</changefreq><priority>{prio}</priority></url>"
+        for path, freq, prio in pages
+    )
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{urls}</urlset>"
+    )
+    return Response(content=body, media_type="application/xml")
 
 
 @app.get("/")
