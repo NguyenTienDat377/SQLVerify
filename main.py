@@ -67,7 +67,6 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("SQLVerify shutting down")
 
-
 app = FastAPI(
     title="SQLVerify",
     description="Formal verification for AI-generated SQL queries.",
