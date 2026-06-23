@@ -57,6 +57,11 @@ if _SENTRY_DSN:
         release="sqlverify@0.1.0",
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
         send_default_pii=False,
+        # Don't ship frame-local secrets to Sentry. The default scrubber matches
+        # var names by exact denylist membership, so secret-bearing locals like
+        # `raw_key` (the sqv_ API key) and `access_token` (the Supabase JWT) would
+        # otherwise leak verbatim on any exception in the auth path.
+        include_local_variables=False,
     )
     logger.info("Sentry initialized (env={})", os.getenv("SENTRY_ENVIRONMENT", "production"))
 

@@ -93,7 +93,7 @@ SQLVerify/
     │   └── img/
     │       ├── favicon.png         # ✅ DONE — real PNG (linked from base.html/landing.html)
     │       ├── hero.png            # ✅ DONE — landing hero image
-    │       └── og-image.png        # ✅ DONE — 1200×630 social-share placeholder (swap for a designed one)
+    │       └── og-image.png        # ✅ DONE — 1200×630 social-share image (official)
     └── templates/
         ├── base.html               # ✅ DONE — app shell + topbar (Projects / API Keys / Billing / Sign out) + Terms/Privacy footer ({% block title %})
         ├── landing.html            # ✅ DONE — marketing page + GitHub + magic-link sign-in
@@ -175,7 +175,7 @@ SQLVerify/
 - `keys.html` — API key management (create form + list)
 - `projects.html` — project management (create form + list + delete)
 - `terms.html` / `privacy.html` — legal pages, served by public `GET /terms` and `GET /privacy` in `main.py` (in the `JWTMiddleware` public allowlist); linked from the `base.html` footer
-- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://sqlverify.com`, no trailing slash). The share image is `static/img/og-image.png` (1200×630 placeholder). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing`, `/docs`, `/openapi.json` and points at the sitemap, which lists the four public pages.
+- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://sqlverify.com`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing`, `/docs`, `/openapi.json` and points at the sitemap, which lists the four public pages.
 - `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
 - `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
 - `partials/api_keys.html` — key list + the show-once raw-key banner
@@ -253,6 +253,8 @@ Still missing: `core/ddl_parser.py` edge cases.
 | Free-tier quota fails **open** | `_enforce_quota` returns the request through on any billing/DB lookup error — a metering hiccup must never block a paying or free user mid-work. |
 | Two auth paths, one `user_id` | Session JWT (browser) **or** per-user API key (CI), both resolved by `JWTMiddleware` into `request.state.user_id`. Access control is enforced in app code (ownership checks + repo `user_id` scoping), **not** RLS — the service key bypasses RLS. |
 | Billing via Lemon Squeezy (MoR) | Merchant of Record handles global VAT; we never touch card data. Plan/quota resolve by `user_id`, stamped onto the subscription via LS checkout custom data. Rate-limiter / breaker / API-key cache are per-process — move to shared state when scaling to multiple workers. |
+| CORS pinned, no wildcard | `main.py` allows only `SITE_URL` + localhost, `GET`/`POST`, with credentialed CORS **off**. An explicit allowlist keeps JSON responses from being read by arbitrary origins. |
+| CSRF via `SameSite=Lax` + POST-only mutations | No CSRF token by design. Session cookies are `SameSite=Lax` (`api/auth.py`), so cross-site POSTs don't carry them; all mutations are `POST` (logout too — so an `<img>`/prefetch can't trigger it); the CI/API path uses `Bearer`/`X-API-Key` (no ambient credentials, structurally CSRF-immune). Add a double-submit token only if a security review requires defense-in-depth. Lax (not Strict) is deliberate — Strict breaks the OAuth redirect-back. |
 
 ---
 

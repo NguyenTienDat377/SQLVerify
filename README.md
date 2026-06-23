@@ -12,12 +12,12 @@
 
 LLMs generate SQL that _looks_ correct. SQLVerify proves whether it _is_ correct.
 
-It uses **Z3 SMT solving** to either:
+Given a Flyway DDL schema and two SQL queries (e.g. an original and an AI-rewritten version), it uses **Z3 SMT solving** to either:
 
-- **Prove two SQL queries are semantically equivalent** — not just syntactically similar, but guaranteed to return the same results on any valid database
-- **Find the exact counterexample that breaks them** — a concrete set of rows showing precisely where and why two queries diverge
+- **Prove the two queries are semantically equivalent** — not just syntactically similar, but guaranteed to return the same results on any valid database within the search bound
+- **Find the exact counterexample that breaks them** — a concrete counterexample database showing precisely where and why they diverge
 
-This is formal, deterministic verification. Not probabilistic checking. Not linting. If SQLVerify says two queries are equivalent, they are.
+This is formal, deterministic verification. Not probabilistic checking. Not linting. If SQLVerify says two queries are equivalent, they are (within the documented bound and SQL subset).
 
 ```
 You paste:   AI-generated SQL + your DDL schema
@@ -35,6 +35,15 @@ SQLVerify is the missing guardrail between AI-generated SQL and your production 
 
 ---
 
+## Two delivery surfaces, one engine
+
+The same Z3 core powers two ways to use SQLVerify:
+
+- **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`) with an on-demand **Explain** button. Snappy timeout (default 15s).
+- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), authenticated with a per-user API key and always explaining divergent results. Verdict-favouring timeout (default 60s).
+
+---
+
 ## Quick Start
 
 ```bash
@@ -49,7 +58,7 @@ pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
-# Fill in ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY
+# Fill in the keys below
 
 # Run locally
 uvicorn main:app --reload --port 8000
@@ -67,7 +76,19 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude        # claude | openai | google
+SITE_URL=                        # full origin, e.g. https://sqlverify.com (no trailing slash) — auth redirects + CORS
+
+# Billing (Lemon Squeezy — Merchant of Record)
+LEMONSQUEEZY_WEBHOOK_SECRET=     # HMAC signing secret (Settings → Webhooks)
+LEMONSQUEEZY_API_KEY=            # for the customer portal lookup
+LS_INDIVIDUAL_VARIANT_ID=        # numeric variant id (webhook → tier map)
+LS_TEAM_VARIANT_ID=
+LS_INDIVIDUAL_CHECKOUT_URL=      # the .../checkout/buy/<uuid> buy-link
+LS_TEAM_CHECKOUT_URL=
+FREE_TIER_MONTHLY_LIMIT=100      # optional; runs/month before upgrade required
 ```
+
+Config is read via `os.getenv` per-module — there is no `config.py`. All of these go into Render's environment variable panel; never commit them.
 
 ---
 
@@ -78,54 +99,66 @@ SQLVerify is a **modular monolith** — clear separation of concerns, no microse
 ```
 sqlverify/
 │
-├── main.py                  # FastAPI entry point, mounts all routers
-├── config.py                # Environment variable loading
+├── main.py                  # FastAPI entry: routers, pinned CORS, rate-limit + JWT middleware,
+│                            #   error handlers (404/500), public pages (/, /pricing, /terms,
+│                            #   /privacy, /robots.txt, /sitemap.xml)
 │
 ├── core/                    # Z3 engine — pure Python, no FastAPI, no DB
-│   ├── models.py            # Dataclasses: SchemaModel, QueryFormula, VerificationResult
-│   ├── ddl_parser.py        # DDL SQL → SchemaModel via sqlglot
-│   ├── sql_encoder.py       # SELECT query → Z3 formula
-│   ├── equivalence.py       # Two formulas → VerificationResult + counterexample
-│   ├── constraint_check.py  # Single query property checking (Direction 2)
-│   └── witness.py           # Z3 model → human-readable counterexample table
+│   ├── models.py            # Dataclasses: Column, ForeignKey, Table, SchemaModel, VerificationResult
+│   ├── ddl_parser.py        # Flyway DDL → SchemaModel via sqlglot
+│   ├── sql_encoder.py       # SELECT query + SchemaModel → Z3 QueryFormula
+│   ├── equivalence.py       # Two formulas → VerificationResult + counterexample (+ SQLite cross-check)
+│   ├── constraint_check.py  # ⬜ stub — single-query constraint checking (Direction 2)
+│   └── witness.py           # ⬜ stub — counterexample formatting (handled inline today)
 │
-├── explainer/               # LLM provider abstraction — swap Claude/GPT/Gemini freely
-│   ├── client.py            # Provider factory
-│   ├── providers.py         # Claude, OpenAI, Google implementations
-│   └── prompts.py           # Prompt templates for counterexample explanation
+├── explainer/               # LLM provider abstraction — swap Claude/GPT/Gemini via env var
+│   ├── explain.py           # explain_result() public API (guarded by the circuit breaker)
+│   ├── providers.py         # LLMProvider ABC + Anthropic/OpenAI/Google + get_provider() factory
+│   ├── circuit_breaker.py   # async breaker — fail fast when the LLM provider is down
+│   └── prompts.py           # equivalence + constraint explanation prompt templates
 │
 ├── api/                     # FastAPI routers
-│   ├── verify.py            # POST /api/verify (file upload + JSON body)
-│   └── explain.py           # POST /api/explain (on-demand LLM explanation)
+│   ├── verify.py            # POST /api/verify, POST /api/verify/text, POST /api/explain/{run_id},
+│   │                        #   GET /api/history[/{run_id}], GET /api/verify/health
+│   ├── auth.py              # GitHub OAuth + magic-link + session cookies + logout
+│   ├── keys.py              # per-user API key CRUD (HTMX partials)
+│   ├── projects.py          # per-user project CRUD (HTMX partials)
+│   ├── billing.py           # Lemon Squeezy checkout + customer portal redirects
+│   └── webhooks.py          # Lemon Squeezy subscription webhooks (HMAC-verified)
 │
-├── db/                      # Supabase client + query helpers
-│   └── client.py
-│
-├── auth/                    # Supabase auth middleware
+├── auth/                    # JWTMiddleware: Supabase JWT (browser) OR per-user API key (CI)
 │   └── middleware.py
 │
+├── db/                      # Supabase client + repositories (service key, scoped by user_id in code)
+│   ├── client.py
+│   └── repositories/        # verification_runs, subscriptions, api_keys, projects
+│
 └── web/                     # Jinja2 + HTMX frontend
-    ├── router.py
-    ├── templates/
-    │   ├── base.html
-    │   ├── verify.html
-    │   └── partials/
-    │       ├── result.html
-    │       └── history.html
-    └── static/
+    ├── templates/           # base, landing, verify, pricing, keys, projects, terms, privacy, 404, 500
+    │   └── partials/        # result, history, api_keys, projects, upgrade_prompt
+    └── static/              # css + img (favicon, hero, og-image)
 ```
 
 ### Key Design Decisions
 
-| Decision                               | Rationale                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Z3 SMT solver for verification         | Deterministic, formal — not heuristic. Counterexamples are mathematically guaranteed.                               |
-| `bound=3` hardcoded                    | Catches >95% of real SQL semantic bugs. Exposing it would confuse most users. Power users can override via env var. |
-| HTMX for frontend                      | No React build step, no npm. Server-rendered, fast, simple.                                                         |
-| Multi-LLM provider abstraction         | Adding a new LLM = one new class in `providers.py`. Never lock into one vendor.                                     |
-| Explainer is on-demand only            | The "Explain" button is an explicit user action. Never auto-call LLM on every verification — cost and latency.      |
-| Render for deployment (not serverless) | Z3 binary is ~50MB. Cold starts on Lambda are too slow. Always-on container is the right fit.                       |
-| Supabase for DB + auth                 | Managed PostgreSQL + built-in auth. No self-hosted infra. Service key stays server-side only.                       |
+| Decision | Rationale |
+| --- | --- |
+| Z3 SMT solver for verification | Deterministic, formal — not heuristic. Counterexamples are mathematically guaranteed within the bound. |
+| `bound=3` hardcoded | Catches >95% of real SQL semantic bugs. Not exposed in the UI — would confuse engineers. Power users can override via env var. |
+| Fail-closed parsing/encoding | Any SQL outside the supported subset raises an error instead of being silently dropped. A dropped predicate can produce a false "equivalent" — the one failure mode a verifier must not have. |
+| Witness cross-check | On a `divergent` verdict, both queries run on the SQLite witness; if outputs agree, the verdict is downgraded to `error` (encoder bug) rather than showing a fake counterexample. |
+| HTMX for frontend | No React build step, no npm. Server-rendered, fast, simple. |
+| Multi-LLM provider abstraction | Adding a new LLM = one new class in `providers.py` + one line in `get_provider()`. Never lock into one vendor. |
+| Explainer is on-demand only | The "Explain" button is an explicit user action. Never auto-call the LLM on every verification — cost and latency. |
+| Circuit breaker on LLM calls | Fails fast when the provider is down so an outage doesn't burn credits/latency. |
+| Per-IP rate limiting (slowapi) | The two solve endpoints are throttled (default 30/min) — verification is expensive, so an unthrottled endpoint lets one client pin a worker. |
+| Per-surface Z3 timeouts | Web defaults 15s (cap 60s) for a snappy UI; CI defaults 60s (clamp 120s) to favour a verdict. On timeout the result is `unknown` — never a wrong answer. |
+| Two auth paths, one `user_id` | Session JWT (browser) or per-user API key (CI), both resolved by `JWTMiddleware`. Access control is enforced in app code (ownership checks + repo scoping), not RLS — the service key bypasses RLS. |
+| CORS pinned, no wildcard | Allowlist of `SITE_URL` + localhost, `GET`/`POST`, credentialed CORS off. |
+| CSRF via `SameSite=Lax` + POST-only mutations | No CSRF token by design — Lax cookies block cross-site POSTs, all mutations are POST, and the CI/API path uses header auth (no ambient credentials). |
+| Render for deployment (not serverless) | Z3 binary is too heavy for Lambda cold starts. Always-on container is the right fit. |
+| Supabase for DB + auth | Managed PostgreSQL + built-in auth. Service key stays server-side only. |
+| Billing via Lemon Squeezy (MoR) | Merchant of Record handles global VAT; we never touch card data. Free tier fails **open** so a metering hiccup never blocks a user. |
 
 ---
 
@@ -133,47 +166,47 @@ sqlverify/
 
 ### 1. Parse the Schema (DDL → SchemaModel)
 
-```python
-# Input: your Flyway migration DDL
+```sql
+-- Input: your Flyway migration DDL
 CREATE TABLE accounts (
     id      INTEGER PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
     balance REAL NOT NULL
 );
-
-# Output: SchemaModel with tables, columns, types, FK constraints
+-- Output: SchemaModel with tables, columns, types, FK/PK/NOT NULL constraints
 ```
 
 ### 2. Encode Queries as Z3 Formulas
 
-Each query becomes a symbolic formula over a bounded database (`bound=3` rows per table). The encoder handles `SELECT`, `WHERE`, `JOIN` (INNER and LEFT), `GROUP BY`, and aggregates.
+Each query becomes a symbolic formula over a bounded database (`bound=3` rows per table). NULLs are modeled as a `(is_null, value)` pair under three-valued logic. The encoder handles `SELECT`, `WHERE`/`HAVING`, INNER/LEFT/RIGHT `JOIN`, `GROUP BY`, and aggregates.
 
-### 3. Check Equivalence
+### 3. Check Equivalence (bag semantics)
 
-Z3 tries to find a database instance where the two formulas produce different results. Two outcomes:
+Z3 tries to find a database instance where the two formulas produce different results:
 
 - **UNSAT** → no such instance exists → queries are **equivalent** ✅
-- **SAT** → here are the exact rows that expose the difference → queries **diverge** ❌
+- **SAT** → here are the exact rows that expose the difference → queries **diverge** ❌ (then verified by re-running both on the concrete SQLite witness)
 
 ### 4. Explain (Optional)
 
-On user request, the counterexample is passed to your configured LLM provider for a plain-English explanation of why the queries diverge.
+On user request — or always, for the CI endpoint — the counterexample is passed to your configured LLM provider for a plain-English explanation of why the queries diverge. The call is wrapped in a circuit breaker, so an LLM outage degrades gracefully instead of breaking verification.
 
 ---
 
-## V1 Scope and Limitations
+## Supported SQL Subset & Limitations
 
-SQLVerify V1 is intentionally constrained. These are known limitations, not bugs:
+Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored. The subset is deliberately wide and widening over time.
 
-- **Single JOIN per query only** — INNER JOIN and LEFT JOIN supported. No RIGHT, FULL OUTER.
-- **No CTEs** — `WITH` clauses are not supported.
-- **No window functions** — `ROW_NUMBER()`, `RANK()`, etc. are out of scope.
-- **No subqueries or UNION**
-- **NULLs** — not modeled as a distinct domain value in Z3. Three-valued SQL logic is a V2 item.
-- **Text/Timestamp equality** is symbolic (interned to integer) — string ordering not supported.
-- **CHECK constraints** — parsed but not encoded into Z3. FK/PK covers the majority of real bugs.
-- **`bound=3`** — may miss bugs requiring 4+ row interactions. Rare in practice.
-- **No cross-dialect comparison** — both queries must be written for the same SQL dialect.
+- **Joins** — any number of INNER joins per query, OR exactly one LEFT/RIGHT join. An outer join cannot be combined with another join. No FULL OUTER, CROSS, or self-joins. Each `JOIN ON` must be a single column equality.
+- **NULLs are modeled** — three-valued logic per the [VeriEQL paper](docs/references/veriEQL-2024.pdf): `IS [NOT] NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT JOIN null-extension are all encoded. NOT NULL / PK columns are forced non-NULL; FK columns may be NULL.
+- **Predicates** — AND-chains of comparisons and `IS [NOT] NULL` only. No `OR` / `IN` / `BETWEEN` / `LIKE`. Column-vs-literal and column-vs-column both supported. Boolean literals (`active = TRUE`) rejected.
+- **No** CTEs (`WITH`), window functions, subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`.
+- **Text/Timestamp equality** is symbolic (interned to integer) — ordering comparisons (`>`, `<`) on text/timestamp are rejected.
+- **`GROUP BY`** merges equal-key rows (Dedup); a bare SELECT column must appear in GROUP BY. `HAVING` supports aggregate comparisons (the aggregate need not be in the SELECT list).
+- **Bag semantics** via tuple multiplicity — `ORDER BY` is accepted but ignored (no list semantics).
+- **CHECK constraints** are parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs).
+- **`bound=3`** — may miss bugs requiring more row interactions (rare in practice). Deep INNER chains (n≥4) get slower and may return `unknown` on timeout — the bound is never silently lowered.
+- **No cross-dialect comparison** — both queries must target the same SQL dialect.
 
 ---
 
@@ -199,17 +232,42 @@ CREATE TABLE verification_runs (
 );
 ```
 
-RLS is enabled. The service key in `db/client.py` bypasses RLS for server-side writes only.
+Plus migrations adding `user_id` (Migration #1), the `api_keys` table (#2), `subscriptions.user_id` (#3), and the `projects` table with `verification_runs.project_id` (#4). RLS is enabled on every table; the service key in `db/client.py` intentionally bypasses RLS for server-side writes, and the repos scope by `user_id`/`owner_id` in code. See [CLAUDE.md](CLAUDE.md) for the full migration SQL.
+
+---
+
+## Billing
+
+Lemon Squeezy as Merchant of Record handles global sales tax/VAT — we never touch card data.
+
+- **Checkout** — `GET /billing/checkout?plan=individual|team` redirects to the plan's LS buy-link, passing `user_id` as checkout custom data.
+- **Webhook** — `POST /api/webhooks/lemonsqueezy` (HMAC-verified) upserts subscriptions on create/update/cancel/expire/resume/payment-failed.
+- **Portal** — `GET /billing/portal` fetches a fresh signed customer-portal URL and redirects.
+- **Free tier** — `FREE_TIER_MONTHLY_LIMIT` (default 100) runs per UTC calendar month, counted by `user_id`; any active paid tier lifts the cap. Enforced on both solve endpoints and **fails open** on a lookup error.
+
+---
+
+## Tests
+
+All suites are standalone (pytest-compatible but no pytest required): `.venv/bin/python tests/<file>.py`.
+
+- `tests/smoke_test.py` — 32 end-to-end checks over `check_equivalence()`.
+- `tests/paper_cases_test.py` — 21 regression tests from the VeriEQL paper.
+- `tests/differential_test.py` — differential fuzzing: random query pairs verified by Z3, cross-checked against concrete SQLite (`--seeds N --bound B`).
+- `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeouts, persistence, explain) with Supabase/LLM stubbed.
+- `tests/api_keys_test.py` — key hashing + dual auth path + magic-link OTP.
+- `tests/circuit_breaker_test.py` — the explainer circuit breaker.
+- `tests/billing_test.py` — free-tier quota gate, checkout, portal, webhook.
 
 ---
 
 ## Roadmap
 
-**V1 (current)** — Single JOIN equivalence checking via web UI
+**Current** — Equivalence checking via web UI **and** CI/CD JSON endpoint, with GitHub/magic-link auth, per-user API keys & projects, and Lemon Squeezy billing.
 
-**V2** — CI/CD integration as a GitHub Action, CTE and subquery support, AI agent pipeline mode
+**Next** — Widen the supported SQL subset (see the SQL-subset-expansion roadmap), single-query constraint checking (Direction 2), and business-intent checks against a user-supplied expectation.
 
-**V3** — Multi-dialect comparison, expanded Z3 encoding (full NULL modeling, window functions), RabbitMQ + worker pool for scale
+**Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap).
 
 ---
 
