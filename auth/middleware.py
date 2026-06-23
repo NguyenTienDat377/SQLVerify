@@ -71,7 +71,11 @@ def _decode_token(token: str) -> dict | None:
         return jwt.decode(
             token,
             signing_key.key,
-            algorithms=["ES256", "RS256", "HS256"],
+            # Asymmetric only. The signing key comes from Supabase's *public* JWKS,
+            # so allowing the symmetric HS256 would invite an algorithm-confusion
+            # forgery (sign an HS256 token using the public key as the HMAC secret).
+            # JWKS only serves asymmetric keys, so dropping HS256 locks out no one.
+            algorithms=["ES256", "RS256"],
             audience="authenticated",
             issuer=f"{supabase_url}/auth/v1",   # reject tokens from any other issuer
         )

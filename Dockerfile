@@ -21,4 +21,7 @@ EXPOSE $PORT
 RUN useradd --create-home appuser
 USER appuser
 
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+# --forwarded-allow-ips='*': trust Render's edge proxy X-Forwarded-For so
+# request.client.host is the real client IP, not the proxy. Without it every
+# request shares one IP and the per-IP rate limits collapse to a global bucket.
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT --forwarded-allow-ips='*' --no-server-header

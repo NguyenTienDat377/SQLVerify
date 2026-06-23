@@ -1,16 +1,61 @@
+# Two services from one blueprint (Render only auto-syncs a file named render.yaml):
+#   - sqlverify          → prod,    deploys from `main`
+#   - sqlverify-staging  → staging, deploys from `staging`
+#
+# `sync: false` vars are NOT stored in the repo — enter them per-service in the
+# Render dashboard. Point staging at its OWN Supabase project + SITE_URL so it
+# never reads or writes prod data. Optional vars not declared here (Lemon Squeezy
+# billing, EXPLAINER_BREAKER_*, LOG_LEVEL, etc.) can also be set in the dashboard
+# — see .env.example for the full list.
 services:
+  # ── Production ──────────────────────────────────────────────────────────
   - type: web
     name: sqlverify
     runtime: docker
     region: singapore
     plan: free
+    branch: main
     healthCheckPath: /api/verify/health
     envVars:
-      - key: ANTHROPIC_API_KEY
-        sync: false
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY        # required by magic-link OTP
         sync: false
       - key: SUPABASE_SERVICE_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SITE_URL                 # prod origin, e.g. https://sqlverify.com — drives HSTS/CORS/cookie-Secure
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
       - key: EXPLAINER_PROVIDER
         value: claude
+      - key: SENTRY_ENVIRONMENT
+        value: production
+
+  # ── Staging ─────────────────────────────────────────────────────────────
+  - type: web
+    name: sqlverify-staging
+    runtime: docker
+    region: singapore
+    plan: free
+    branch: staging
+    healthCheckPath: /api/verify/health
+    envVars:
+      - key: SUPABASE_URL             # use a SEPARATE staging Supabase project
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SITE_URL                 # staging origin, e.g. https://sqlverify-staging.onrender.com
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: EXPLAINER_PROVIDER
+        value: claude
+      - key: SENTRY_ENVIRONMENT
+        value: staging

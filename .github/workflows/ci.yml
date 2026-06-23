@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run test suite
+        # The suites are standalone (no real secrets — API tests self-stub
+        # Supabase/LLM). PYTHONPATH=workspace lets `import core` resolve when
+        # running each file directly.
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          for t in tests/*.py; do
+            echo "::group::$t"
+            python "$t"
+            echo "::endgroup::"
+          done
+
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies + pip-audit
+        run: |
+          pip install -r requirements.txt
+          pip install pip-audit
+      - name: Audit installed dependencies for known CVEs
+        # Audits the full resolved environment (incl. transitive deps).
+        # To accept a specific advisory you can't fix yet, add:
+        #   pip-audit --ignore-vuln GHSA-xxxx-xxxx-xxxx
+        run: pip-audit

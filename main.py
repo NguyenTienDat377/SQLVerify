@@ -66,8 +66,27 @@ if _SENTRY_DSN:
     logger.info("Sentry initialized (env={})", os.getenv("SENTRY_ENVIRONMENT", "production"))
 
 
+# Vars the app cannot run correctly without. Validated at boot so a misconfigured
+# deploy fails fast and loudly here, instead of throwing a 500 on the first user
+# request after Render has already reported the service "healthy".
+_REQUIRED_ENV = (
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_KEY",
+)
+
+
+def _validate_required_env() -> None:
+    missing = [name for name in _REQUIRED_ENV if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _validate_required_env()
     logger.info("SQLVerify starting up")
     yield
     logger.info("SQLVerify shutting down")
@@ -105,6 +124,48 @@ app.add_middleware(
 
 # JWT auth middleware
 app.add_middleware(JWTMiddleware)
+
+
+# Content-Security-Policy. Scoped to exactly what the app loads: HTMX from unpkg,
+# Google Fonts CSS/files, and same-origin everything else. 'unsafe-inline' is
+# required because the templates use inline <script>/<style> and onclick handlers
+# (a strict nonce-based policy would need those refactored). frame-ancestors
+# 'none' is the modern clickjacking control (complements X-Frame-Options); base-uri
+# and form-action are locked to 'self'; object-src 'none' blocks legacy plugins.
+_CSP = "; ".join((
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' https://unpkg.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data:",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+))
+
+
+# Security response headers on every response. HSTS is only emitted over HTTPS
+# (request.url.scheme reflects X-Forwarded-Proto thanks to uvicorn
+# --forwarded-allow-ips), so local http dev is untouched and we never pin a
+# browser to HTTPS for a host that can't serve it.
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
+@app.get("/ping", include_in_schema=False)
+async def ping():
+    return Response(content="ok", media_type="text/plain")
 
 # Routers
 app.include_router(verify_router)

@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Python dependencies — opens PRs to bump vulnerable/outdated packages
+  # against GitHub's Advisory DB.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
+  # Keep the GitHub Actions used in workflows up to date too.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"

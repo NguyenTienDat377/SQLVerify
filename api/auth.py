@@ -22,20 +22,28 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from loguru import logger
 from pydantic import BaseModel
 
+# Share the single app limiter (registered on app.state.limiter in main.py) rather
+# than spinning up a second instance — one bucket, one source of truth.
+from api.verify import limiter
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _COOKIE_OPTS = dict(httponly=True, samesite="lax")
 
-
 def _is_secure(request: Request) -> bool:
     return os.getenv("SITE_URL", str(request.base_url)).startswith("https://")
 
+LOGIN_RATE_LIMIT = "5/minute"
+# magic-link triggers a real OTP email send — throttle it harder than the
+# credential-less OAuth redirect to blunt inbox-bombing / email-quota abuse.
+MAGIC_LINK_RATE_LIMIT = "5/minute"
 
 # ---------------------------------------------------------------------------
 # GET /auth/login  — redirect to Supabase GitHub OAuth
 # ---------------------------------------------------------------------------
 
 @router.get("/login")
+@limiter.limit(LOGIN_RATE_LIMIT)
 async def login(request: Request):
     site_url = os.getenv("SITE_URL", str(request.base_url).rstrip("/"))
     callback_url = f"{site_url}/auth/callback"
@@ -56,6 +64,7 @@ async def login(request: Request):
 # ---------------------------------------------------------------------------
 
 @router.post("/magic-link")
+@limiter.limit(MAGIC_LINK_RATE_LIMIT)
 async def magic_link(request: Request, email: str = Form(...)):
     """
     Trigger a Supabase magic-link (OTP) email. The emailed link lands on the
