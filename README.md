@@ -141,24 +141,24 @@ sqlverify/
 
 ### Key Design Decisions
 
-| Decision | Rationale |
-| --- | --- |
-| Z3 SMT solver for verification | Deterministic, formal — not heuristic. Counterexamples are mathematically guaranteed within the bound. |
-| `bound=3` hardcoded | Catches >95% of real SQL semantic bugs. Not exposed in the UI — would confuse engineers. Power users can override via env var. |
-| Fail-closed parsing/encoding | Any SQL outside the supported subset raises an error instead of being silently dropped. A dropped predicate can produce a false "equivalent" — the one failure mode a verifier must not have. |
-| Witness cross-check | On a `divergent` verdict, both queries run on the SQLite witness; if outputs agree, the verdict is downgraded to `error` (encoder bug) rather than showing a fake counterexample. |
-| HTMX for frontend | No React build step, no npm. Server-rendered, fast, simple. |
-| Multi-LLM provider abstraction | Adding a new LLM = one new class in `providers.py` + one line in `get_provider()`. Never lock into one vendor. |
-| Explainer is on-demand only | The "Explain" button is an explicit user action. Never auto-call the LLM on every verification — cost and latency. |
-| Circuit breaker on LLM calls | Fails fast when the provider is down so an outage doesn't burn credits/latency. |
-| Per-IP rate limiting (slowapi) | The two solve endpoints are throttled (default 30/min) — verification is expensive, so an unthrottled endpoint lets one client pin a worker. |
-| Per-surface Z3 timeouts | Web defaults 15s (cap 60s) for a snappy UI; CI defaults 60s (clamp 120s) to favour a verdict. On timeout the result is `unknown` — never a wrong answer. |
-| Two auth paths, one `user_id` | Session JWT (browser) or per-user API key (CI), both resolved by `JWTMiddleware`. Access control is enforced in app code (ownership checks + repo scoping), not RLS — the service key bypasses RLS. |
-| CORS pinned, no wildcard | Allowlist of `SITE_URL` + localhost, `GET`/`POST`, credentialed CORS off. |
-| CSRF via `SameSite=Lax` + POST-only mutations | No CSRF token by design — Lax cookies block cross-site POSTs, all mutations are POST, and the CI/API path uses header auth (no ambient credentials). |
-| Render for deployment (not serverless) | Z3 binary is too heavy for Lambda cold starts. Always-on container is the right fit. |
-| Supabase for DB + auth | Managed PostgreSQL + built-in auth. Service key stays server-side only. |
-| Billing via Lemon Squeezy (MoR) | Merchant of Record handles global VAT; we never touch card data. Free tier fails **open** so a metering hiccup never blocks a user. |
+| Decision                                      | Rationale                                                                                                                                                                                           |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Z3 SMT solver for verification                | Deterministic, formal — not heuristic. Counterexamples are mathematically guaranteed within the bound.                                                                                              |
+| `bound=3` hardcoded                           | Catches >95% of real SQL semantic bugs. Not exposed in the UI — would confuse engineers. Power users can override via env var.                                                                      |
+| Fail-closed parsing/encoding                  | Any SQL outside the supported subset raises an error instead of being silently dropped. A dropped predicate can produce a false "equivalent" — the one failure mode a verifier must not have.       |
+| Witness cross-check                           | On a `divergent` verdict, both queries run on the SQLite witness; if outputs agree, the verdict is downgraded to `error` (encoder bug) rather than showing a fake counterexample.                   |
+| HTMX for frontend                             | No React build step, no npm. Server-rendered, fast, simple.                                                                                                                                         |
+| Multi-LLM provider abstraction                | Adding a new LLM = one new class in `providers.py` + one line in `get_provider()`. Never lock into one vendor.                                                                                      |
+| Explainer is on-demand only                   | The "Explain" button is an explicit user action. Never auto-call the LLM on every verification — cost and latency.                                                                                  |
+| Circuit breaker on LLM calls                  | Fails fast when the provider is down so an outage doesn't burn credits/latency.                                                                                                                     |
+| Per-IP rate limiting (slowapi)                | The two solve endpoints are throttled (default 30/min) — verification is expensive, so an unthrottled endpoint lets one client pin a worker.                                                        |
+| Per-surface Z3 timeouts                       | Web defaults 15s (cap 60s) for a snappy UI; CI defaults 60s (clamp 120s) to favour a verdict. On timeout the result is `unknown` — never a wrong answer.                                            |
+| Two auth paths, one `user_id`                 | Session JWT (browser) or per-user API key (CI), both resolved by `JWTMiddleware`. Access control is enforced in app code (ownership checks + repo scoping), not RLS — the service key bypasses RLS. |
+| CORS pinned, no wildcard                      | Allowlist of `SITE_URL` + localhost, `GET`/`POST`, credentialed CORS off.                                                                                                                           |
+| CSRF via `SameSite=Lax` + POST-only mutations | No CSRF token by design — Lax cookies block cross-site POSTs, all mutations are POST, and the CI/API path uses header auth (no ambient credentials).                                                |
+| Render for deployment (not serverless)        | Z3 binary is too heavy for Lambda cold starts. Always-on container is the right fit.                                                                                                                |
+| Supabase for DB + auth                        | Managed PostgreSQL + built-in auth. Service key stays server-side only.                                                                                                                             |
+| Billing via Lemon Squeezy (MoR)               | Merchant of Record handles global VAT; we never touch card data. Free tier fails **open** so a metering hiccup never blocks a user.                                                                 |
 
 ---
 
@@ -267,7 +267,7 @@ All suites are standalone (pytest-compatible but no pytest required): `.venv/bin
 
 **Next** — Widen the supported SQL subset (see the SQL-subset-expansion roadmap), single-query constraint checking (Direction 2), and business-intent checks against a user-supplied expectation.
 
-**Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap).
+**Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap), PostHog.
 
 ---
 
