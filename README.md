@@ -269,6 +269,8 @@ All suites are standalone (pytest-compatible but no pytest required): `.venv/bin
 
 **Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap), PostHog.
 
+**AI Agent Guardrails** -For Self Healing AI Agents
+
 ---
 
 ## License
