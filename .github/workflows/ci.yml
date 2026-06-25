@@ -49,3 +49,44 @@ jobs:
         # To accept a specific advisory you can't fix yet, add:
         #   pip-audit --ignore-vuln GHSA-xxxx-xxxx-xxxx
         run: pip-audit
+  notify:
+    name: Discord notification
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: always()
+    steps:
+      - name: Send Discord notification
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_DEPLOY_WEBHOOK }}
+        run: |
+          TEST="${{ needs.test.result }}"
+          SECURITY="${{ needs.security.result }}"
+
+          if [[ "$TEST" == "success" && "$SECURITY" == "success" ]]; then
+            COLOR=3066993
+            TITLE="✅ CI Passed — deploying to Render"
+          else
+            COLOR=15158332
+            TITLE="❌ CI Failed — deploy blocked"
+          fi
+
+          # Shorten commit SHA to 7 chars
+          SHORT_SHA="${{ github.sha }}"
+          SHORT_SHA="${SHORT_SHA:0:7}"
+
+          curl -s -H "Content-Type: application/json" \
+          -d "{
+            \"embeds\": [{
+              \"title\": \"$TITLE\",
+              \"color\": $COLOR,
+              \"fields\": [
+                {\"name\": \"🧪 Tests\", \"value\": \"$TEST\", \"inline\": true},
+                {\"name\": \"🔒 Security\", \"value\": \"$SECURITY\", \"inline\": true},
+                {\"name\": \"🌿 Branch\", \"value\": \"${{ github.ref_name }}\", \"inline\": true},
+                {\"name\": \"📝 Commit\", \"value\": \"[\`$SHORT_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": false},
+                {\"name\": \"👤 Author\", \"value\": \"${{ github.actor }}\", \"inline\": true}
+              ],
+              \"footer\": {\"text\": \"SQLVerify CI • ${{ github.repository }}\"}
+            }]
+          }" \
+          "$DISCORD_WEBHOOK"
