@@ -13,7 +13,7 @@ services:
     name: sqlverify
     runtime: docker
     region: singapore
-    plan: free
+    plan: starter
     branch: main
     healthCheckPath: /api/verify/health
     envVars:
