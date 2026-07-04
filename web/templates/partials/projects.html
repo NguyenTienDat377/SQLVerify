@@ -4,14 +4,13 @@
 </div>
 {% endif %}
 
-<ul class="projects-list" style="list-style: none; padding: 0; margin: 0;">
+<ul class="projects-list list-container">
     {% for p in projects %}
-    <li class="project-row"
-        style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 0; border-bottom: 1px solid var(--border, #2a2a35);">
-        <div style="flex: 1; min-width: 0;">
-            <div class="project-name" style="font-weight: 600;">{{ p.name }}</div>
+    <li class="project-row list-row">
+        <div class="list-row-content">
+            <div class="project-name" style="font-weight: 600; color: var(--text-primary);">{{ p.name }}</div>
             {% if p.description %}
-            <div class="project-desc" style="color: var(--text-secondary); font-size: 0.85rem;">{{ p.description }}</div>
+            <div class="project-desc" style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.125rem;">{{ p.description }}</div>
             {% endif %}
         </div>
         <button class="btn btn-danger"
@@ -23,7 +22,7 @@
         </button>
     </li>
     {% else %}
-    <li class="project-empty" style="color: var(--text-secondary); padding: 0.75rem 0;">
+    <li class="project-empty" style="color: var(--text-secondary); padding: 1.5rem; text-align: center; border: 1px dashed var(--panel-border); border-radius: 8px;">
         No projects yet — create one above.
     </li>
     {% endfor %}

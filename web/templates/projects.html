@@ -8,15 +8,14 @@
         repository). Create a project below, then attach runs to it.
     </p>
 
-    <form class="project-create-form"
+    <form class="project-create-form inline-form"
           hx-post="/api/projects"
           hx-target="#projects-panel"
-          hx-swap="innerHTML"
-          style="display: flex; gap: 0.5rem; margin: 1.5rem 0; flex-wrap: wrap;">
+          hx-swap="innerHTML">
         <input type="text" name="name" placeholder="Project name (e.g. Payments API)"
-               required maxlength="100" class="form-input" style="flex: 1; min-width: 200px;">
+               required maxlength="100" class="form-input">
         <input type="text" name="description" placeholder="Description (optional)"
-               maxlength="500" class="form-input" style="flex: 1; min-width: 200px;">
+               maxlength="500" class="form-input">
         <button type="submit" class="btn btn-primary">Create project</button>
     </form>
 

@@ -162,7 +162,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     content={"error": "Unauthorized", "detail": "Missing or invalid credentials."},
                 )
-            return RedirectResponse(url="/")
+            return RedirectResponse(url="/?auth_error=login_required")
 
         request.state.user_id = user_id
         request.state.user_email = user_email

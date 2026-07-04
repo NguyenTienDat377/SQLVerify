@@ -90,14 +90,14 @@
                     </a>
                     <a href="#features" class="btn btn-secondary btn-large">Learn More</a>
                 </div>
-                <form class="magic-link-form"
+                <form class="magic-link-form inline-form"
                       hx-post="/auth/magic-link"
                       hx-target="#magic-link-msg"
                       hx-swap="innerHTML"
-                      style="display:flex; gap:0.5rem; margin-top:1.25rem; max-width:440px;">
-                    <input type="email" name="email" placeholder="you@company.com"
-                           required aria-label="Email address" class="form-input" style="flex:1;">
-                    <button type="submit" class="btn btn-secondary btn-large">Email me a link</button>
+                      style="margin: 2rem 0 0 0; max-width: 460px;">
+                    <input type="email" name="email" placeholder="name@company.com"
+                           required aria-label="Email address" class="form-input" style="padding: 0.875rem 1.25rem; font-size: 1rem;">
+                    <button type="submit" class="btn btn-primary btn-large" style="white-space: nowrap;">Email me a link</button>
                 </form>
                 <div id="magic-link-msg" style="margin-top:0.5rem; color: var(--text-secondary); font-size:0.9rem;"></div>
             </div>
@@ -179,6 +179,32 @@
       location.replace(r.ok ? "/verify" : "/?auth_error=session_failed");
     })
     .catch(function() { location.replace("/?auth_error=network_error"); });
+  })();
+
+  // Handle auth errors from query params
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    var err = params.get("auth_error");
+    if (err) {
+      var msg = "Authentication failed.";
+      if (err === "login_required") msg = "Please sign in to access that page.";
+      else if (err === "session_failed") msg = "Failed to establish a session. Please try again.";
+      else if (err === "network_error") msg = "Network error during sign in.";
+      else if (err === "no_token") msg = "Sign in link was invalid or expired.";
+      
+      var toast = document.createElement("div");
+      toast.className = "toast-popup";
+      toast.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--danger-color); flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> <span>' + msg + '</span>';
+      document.body.appendChild(toast);
+      
+      setTimeout(function() {
+        toast.style.opacity = '0';
+        setTimeout(function() { toast.remove(); }, 300);
+      }, 5000);
+      
+      // Clean up the URL
+      window.history.replaceState({}, document.title, "/");
+    }
   })();
 </script>
 </body>

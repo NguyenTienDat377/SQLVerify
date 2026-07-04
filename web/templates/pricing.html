@@ -5,6 +5,17 @@
     Start for free, then upgrade when you need more power. No hidden fees or
     surprise charges.
   </p>
+  {% if user_email %}
+  <div style="margin-top: 1.5rem; padding: 0.75rem 1.25rem; background-color: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; display: inline-block;">
+    <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">
+      Signed in as <strong style="color: var(--text-primary);">{{ user_email }}</strong>.
+      <br>
+      Buying for a different account? 
+      <a href="#" onclick="document.getElementById('logout-form-pricing').submit(); return false;" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Sign out to switch</a>
+    </p>
+    <form id="logout-form-pricing" method="post" action="/auth/logout" style="display: none;"></form>
+  </div>
+  {% endif %}
 </div>
 
 <div class="pricing-grid">
@@ -48,9 +59,11 @@
       </li>
     </ul>
 
-    <a href="/auth/login" class="btn btn-pricing btn-pricing-secondary"
-      >Get Started</a
-    >
+    {% if user_email %}
+    <a href="/" class="btn w-full btn-secondary">Go to App</a>
+    {% else %}
+    <a href="/auth/login" class="btn w-full btn-secondary">Get Started</a>
+    {% endif %}
   </div>
 
   <!-- Individual Tier -->
@@ -112,7 +125,7 @@
     <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
     <a
       href="/billing/checkout?plan=individual"
-      class="btn btn-pricing btn-pricing-primary"
+      class="btn w-full btn-primary"
       >Upgrade to Individual</a
     >
   </div>
@@ -190,7 +203,7 @@
     <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
     <a
       href="/billing/checkout?plan=team"
-      class="btn btn-pricing btn-pricing-secondary"
+      class="btn w-full btn-secondary"
       >Upgrade to Team</a
     >
   </div>

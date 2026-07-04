@@ -19,13 +19,13 @@ services:
     envVars:
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_ANON_KEY        # required by magic-link OTP
+      - key: SUPABASE_ANON_KEY # required by magic-link OTP
         sync: false
       - key: SUPABASE_SERVICE_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: SITE_URL                 # prod origin, e.g. https://sqlverify.com — drives HSTS/CORS/cookie-Secure
+      - key: SITE_URL # prod origin, e.g. https://sqlverify.com — drives HSTS/CORS/cookie-Secure
         sync: false
       - key: SENTRY_DSN
         sync: false
@@ -43,7 +43,7 @@ services:
     branch: staging
     healthCheckPath: /api/verify/health
     envVars:
-      - key: SUPABASE_URL             # use a SEPARATE staging Supabase project
+      - key: SUPABASE_URL # use a SEPARATE staging Supabase project
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
@@ -51,7 +51,7 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: SITE_URL                 # staging origin, e.g. https://sqlverify-staging.onrender.com
+      - key: SITE_URL # staging origin, e.g. https://sqlverify-staging.onrender.com
         sync: false
       - key: SENTRY_DSN
         sync: false

@@ -8,13 +8,12 @@
         creation — store it somewhere safe.
     </p>
 
-    <form class="key-create-form"
+    <form class="key-create-form inline-form"
           hx-post="/api/keys"
           hx-target="#api-keys-panel"
-          hx-swap="innerHTML"
-          style="display: flex; gap: 0.5rem; margin: 1.5rem 0;">
+          hx-swap="innerHTML">
         <input type="text" name="name" placeholder="Key name (e.g. CI pipeline)"
-               required style="flex: 1;">
+               required class="form-input">
         <button type="submit" class="btn btn-primary">Create key</button>
     </form>
 

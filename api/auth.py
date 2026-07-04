@@ -96,8 +96,21 @@ async def magic_link(request: Request, email: str = Form(...)):
     # is registered, and keep the UX simple ("go check your email").
     if "hx-request" in request.headers:
         return HTMLResponse(
-            '<p class="auth-msg">Check your inbox — if that address is eligible, '
-            "a sign-in link is on its way.</p>"
+            """
+            <div class="toast-popup" id="magic-link-toast">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--success-color); flex-shrink: 0;"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>Check your inbox &mdash; a sign-in link is on its way.</span>
+            </div>
+            <script>
+              setTimeout(() => {
+                const toast = document.getElementById('magic-link-toast');
+                if (toast) {
+                  toast.style.opacity = '0';
+                  setTimeout(() => toast.remove(), 300);
+                }
+              }, 4000);
+            </script>
+            """
         )
     return JSONResponse({"ok": True})
 

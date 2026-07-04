@@ -45,7 +45,7 @@
     <div class="app-container">
       <!-- Topbar -->
       <header class="topbar">
-        <div class="topbar-logo">
+        <a href="/" class="topbar-logo" style="text-decoration: none; color: inherit;">
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="24"
@@ -60,58 +60,15 @@
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
           </svg>
           SQLVerify
-        </div>
+        </a>
         <div class="topbar-user">
-          <a
-            href="/pricing"
-            class="topbar-link"
-            style="
-              color: var(--text-secondary);
-              text-decoration: none;
-              margin-right: 1rem;
-              font-size: 0.875rem;
-              font-weight: 500;
-            "
-            >Pricing</a
-          >
+          <a href="/pricing" class="topbar-link">Pricing</a>
           {% if user_email %}
           <span class="topbar-email">{{ user_email }}</span>
-          <a
-            href="/projects"
-            class="topbar-link"
-            style="
-              color: var(--text-secondary);
-              text-decoration: none;
-              margin-right: 1rem;
-              font-size: 0.875rem;
-              font-weight: 500;
-            "
-            >Projects</a
-          >
-          <a
-            href="/keys"
-            class="topbar-link"
-            style="
-              color: var(--text-secondary);
-              text-decoration: none;
-              margin-right: 1rem;
-              font-size: 0.875rem;
-              font-weight: 500;
-            "
-            >API Keys</a
-          >
-          <a
-            href="/billing/portal"
-            class="topbar-link"
-            style="
-              color: var(--text-secondary);
-              text-decoration: none;
-              margin-right: 1rem;
-              font-size: 0.875rem;
-              font-weight: 500;
-            "
-            >Billing</a
-          >
+          <a href="/verify" class="topbar-link">Verify</a>
+          <a href="/projects" class="topbar-link">Projects</a>
+          <a href="/keys" class="topbar-link">API Keys</a>
+          <a href="/billing/portal" class="topbar-link">Billing</a>
           <form method="post" action="/auth/logout" style="display: inline">
             <button type="submit" class="btn-logout">Sign out</button>
           </form>
