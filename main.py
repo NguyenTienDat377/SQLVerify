@@ -12,6 +12,7 @@ Deploy on Render:
 """
 
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 
@@ -127,23 +128,36 @@ app.add_middleware(JWTMiddleware)
 
 
 # Content-Security-Policy. Scoped to exactly what the app loads: HTMX from unpkg,
-# Google Fonts CSS/files, and same-origin everything else. 'unsafe-inline' is
-# required because the templates use inline <script>/<style> and onclick handlers
-# (a strict nonce-based policy would need those refactored). frame-ancestors
-# 'none' is the modern clickjacking control (complements X-Frame-Options); base-uri
-# and form-action are locked to 'self'; object-src 'none' blocks legacy plugins.
-_CSP = "; ".join((
-    "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://unpkg.com",
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data:",
-    "connect-src 'self'",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "frame-ancestors 'none'",
-    "form-action 'self'",
-))
+# Google Fonts CSS/files, and same-origin everything else.
+#
+# script-src uses a per-request nonce (generated in security_headers, exposed to
+# templates as request.state.csp_nonce) instead of 'unsafe-inline'. Only our own
+# nonce-tagged <script> tags run; an injected inline script carries no valid
+# nonce and is blocked — this is the finding Mozilla Observatory flags when
+# 'unsafe-inline' is present in script-src. The unpkg host source coexists with
+# the nonce (both are additive without 'strict-dynamic'), so HTMX still loads.
+#
+# style-src keeps 'unsafe-inline' deliberately: the templates use many inline
+# style="" attributes (which a CSP nonce cannot cover — nonces apply only to
+# <style>/<link>, not style attributes), and inline styling is not a script-
+# execution vector, so Observatory does not penalise it.
+#
+# frame-ancestors 'none' is the modern clickjacking control (complements
+# X-Frame-Options); base-uri and form-action are locked to 'self'; object-src
+# 'none' blocks legacy plugins.
+def _csp_header(nonce: str) -> str:
+    return "; ".join((
+        "default-src 'self'",
+        f"script-src 'self' 'nonce-{nonce}' https://unpkg.com",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+    ))
 
 
 # Security response headers on every response. HSTS is only emitted over HTTPS
@@ -152,11 +166,17 @@ _CSP = "; ".join((
 # browser to HTTPS for a host that can't serve it.
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    # Fresh per-request nonce, stashed on request.state BEFORE the handler runs
+    # so templates can stamp it onto their <script> tags (rides the same
+    # request.state channel JWTMiddleware uses for user_id). The matching
+    # 'nonce-…' source is added to the CSP header below.
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("Content-Security-Policy", _csp_header(nonce))
     if request.url.scheme == "https":
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"

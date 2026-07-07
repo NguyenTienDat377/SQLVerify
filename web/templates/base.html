@@ -39,7 +39,10 @@
     <link rel="icon" type="image/png" href="/static/img/favicon.png" />
 
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.6"></script>
+    <script
+      src="https://unpkg.com/htmx.org@1.9.6/dist/htmx.min.js"
+      integrity="sha384-FhXw7b6AlE/jyjlZH5iHa/tTe9EpJ1Y55RjcgPbjeWMskSxZt1v9qkxLJWNJaGni"
+      crossorigin="anonymous"></script>
   </head>
   <body>
     <div class="app-container">
@@ -112,7 +115,7 @@
       </footer>
     </div>
 
-    <script>
+    <script nonce="{{ request.state.csp_nonce }}">
       // Simple JS for file upload name display
       document.addEventListener("change", function (e) {
         if (e.target && e.target.type === "file") {

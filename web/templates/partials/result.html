@@ -26,8 +26,8 @@
 
         <!-- Plain English / Raw JSON toggle -->
         <div class="view-toggle" style="margin-bottom: 1.25rem;">
-            <button class="toggle-btn active" onclick="showView('plain', this)">Plain English</button>
-            <button class="toggle-btn"        onclick="showView('json',  this)">Raw JSON</button>
+            <button class="toggle-btn active" data-view="plain">Plain English</button>
+            <button class="toggle-btn"        data-view="json">Raw JSON</button>
         </div>
 
         <!-- Plain English view -->
@@ -185,11 +185,8 @@
 
 </div>
 
-<script>
-function showView(view, btn) {
-    document.getElementById('view-plain').style.display = view === 'plain' ? 'block' : 'none';
-    document.getElementById('view-json').style.display  = view === 'json'  ? 'block' : 'none';
-    btn.closest('.view-toggle').querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-}
-</script>
+<!-- The Plain English / Raw JSON toggle is handled by a delegated listener in
+     verify.html (the host page). An inline <script> here would be swapped in by
+     HTMX after load and could not carry a valid CSP nonce, so it would be
+     blocked. The buttons above use data-view instead of an inline onclick. -->
+

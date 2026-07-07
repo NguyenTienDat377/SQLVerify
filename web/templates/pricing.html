@@ -11,10 +11,16 @@
       Signed in as <strong style="color: var(--text-primary);">{{ user_email }}</strong>.
       <br>
       Buying for a different account? 
-      <a href="#" onclick="document.getElementById('logout-form-pricing').submit(); return false;" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Sign out to switch</a>
+      <a href="#" id="pricing-logout-link" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Sign out to switch</a>
     </p>
     <form id="logout-form-pricing" method="post" action="/auth/logout" style="display: none;"></form>
   </div>
+  <script nonce="{{ request.state.csp_nonce }}">
+    document.getElementById("pricing-logout-link").addEventListener("click", function (e) {
+      e.preventDefault();
+      document.getElementById("logout-form-pricing").submit();
+    });
+  </script>
   {% endif %}
 </div>
 

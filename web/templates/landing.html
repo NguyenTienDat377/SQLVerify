@@ -23,7 +23,7 @@
     <meta name="twitter:image" content="{{ site_url }}/static/img/og-image.png">
 
     <!-- Structured data: helps search engines understand this is a SaaS dev tool -->
-    <script type="application/ld+json">
+    <script type="application/ld+json" nonce="{{ request.state.csp_nonce }}">
     {
       "@context": "https://schema.org",
       "@type": "SoftwareApplication",
@@ -50,7 +50,10 @@
     <link rel="stylesheet" href="/static/css/styles.css?v=1.1">
 
     <!-- HTMX (magic-link form) -->
-    <script src="https://unpkg.com/htmx.org@1.9.6"></script>
+    <script
+      src="https://unpkg.com/htmx.org@1.9.6/dist/htmx.min.js"
+      integrity="sha384-FhXw7b6AlE/jyjlZH5iHa/tTe9EpJ1Y55RjcgPbjeWMskSxZt1v9qkxLJWNJaGni"
+      crossorigin="anonymous"></script>
 </head>
 <body class="landing-page">
     <div class="landing-container">
@@ -162,7 +165,7 @@
             </div>
         </footer>
     </div>
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
   (function () {
     var params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
     if (!params.access_token) return;

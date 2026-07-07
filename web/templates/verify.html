@@ -26,13 +26,12 @@
   </div>
 
   <div class="tabs">
-    <div class="tab active" id="tab-sql" onclick="switchTab('sql')">
+    <div class="tab active" id="tab-sql">
       SQL Input
     </div>
     <div
       class="tab"
       id="tab-history"
-      onclick="switchTab('history')"
       hx-get="/api/history"
       hx-target="#history-panel"
       hx-swap="innerHTML"
@@ -58,8 +57,8 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
           <label style="margin: 0; font-weight: 600;">Schema / DDL</label>
           <div class="segmented-control">
-            <label><input type="radio" name="schema_input_type" value="file" checked onclick="toggleInput('schema', 'file')"> File</label>
-            <label><input type="radio" name="schema_input_type" value="text" onclick="toggleInput('schema', 'text')"> Text</label>
+            <label><input type="radio" name="schema_input_type" value="file" checked> File</label>
+            <label><input type="radio" name="schema_input_type" value="text"> Text</label>
           </div>
         </div>
         <div class="upload-zone" id="schema_file_container">
@@ -77,8 +76,8 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
           <label style="margin: 0; font-weight: 600;">Original Query</label>
           <div class="segmented-control">
-            <label><input type="radio" name="query_v1_input_type" value="file" checked onclick="toggleInput('query_v1', 'file')"> File</label>
-            <label><input type="radio" name="query_v1_input_type" value="text" onclick="toggleInput('query_v1', 'text')"> Text</label>
+            <label><input type="radio" name="query_v1_input_type" value="file" checked> File</label>
+            <label><input type="radio" name="query_v1_input_type" value="text"> Text</label>
           </div>
         </div>
         <div class="upload-zone" id="query_v1_file_container">
@@ -96,8 +95,8 @@
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
           <label style="margin: 0; font-weight: 600;">AI-Generated Query</label>
           <div class="segmented-control">
-            <label><input type="radio" name="query_v2_input_type" value="file" checked onclick="toggleInput('query_v2', 'file')"> File</label>
-            <label><input type="radio" name="query_v2_input_type" value="text" onclick="toggleInput('query_v2', 'text')"> Text</label>
+            <label><input type="radio" name="query_v2_input_type" value="file" checked> File</label>
+            <label><input type="radio" name="query_v2_input_type" value="text"> Text</label>
           </div>
         </div>
         <div class="upload-zone" id="query_v2_file_container">
@@ -280,7 +279,7 @@
   </div>
 </section>
 
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
   function switchTab(tab) {
     document
       .querySelectorAll(".tab")
@@ -305,5 +304,37 @@
       document.querySelector(`[name="${field}_file"]`).value = '';
     }
   }
+
+  // Wire the tab and input-type controls here instead of inline onclick=
+  // attributes, which a nonce-based CSP (no 'unsafe-inline') would block.
+  document.getElementById("tab-sql")
+    .addEventListener("click", () => switchTab("sql"));
+  document.getElementById("tab-history")
+    .addEventListener("click", () => switchTab("history"));
+  document.querySelectorAll(".segmented-control input[type=radio]")
+    .forEach((r) =>
+      r.addEventListener("change", () =>
+        toggleInput(r.name.replace("_input_type", ""), r.value)
+      )
+    );
+
+  // showView lived in an inline <script> inside the result partial, which HTMX
+  // swaps in via AJAX — a nonce cannot authorise a script inserted after load,
+  // so it is handled here with event delegation on the document instead. The
+  // toggle buttons carry data-view; this listener catches clicks on them even
+  // after the partial is swapped into #result-panel.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".toggle-btn[data-view]");
+    if (!btn) return;
+    const view = btn.getAttribute("data-view");
+    const plain = document.getElementById("view-plain");
+    const json = document.getElementById("view-json");
+    if (plain) plain.style.display = view === "plain" ? "block" : "none";
+    if (json) json.style.display = view === "json" ? "block" : "none";
+    btn.closest(".view-toggle")
+      .querySelectorAll(".toggle-btn")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+  });
 </script>
 {% endblock %}
