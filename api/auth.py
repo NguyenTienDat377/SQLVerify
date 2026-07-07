@@ -95,21 +95,16 @@ async def magic_link(request: Request, email: str = Form(...)):
     # Respond identically regardless of outcome — don't leak whether an address
     # is registered, and keep the UX simple ("go check your email").
     if "hx-request" in request.headers:
+        # No inline <script> here: this fragment is swapped in by HTMX, and an
+        # injected inline script carries no valid CSP nonce (script-src has no
+        # 'unsafe-inline'), so it would be blocked. The toast is auto-dismissed
+        # by a page-level htmx:afterSwap handler in landing.html instead.
         return HTMLResponse(
             """
             <div class="toast-popup" id="magic-link-toast">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--success-color); flex-shrink: 0;"><polyline points="20 6 9 17 4 12"></polyline></svg>
               <span>Check your inbox &mdash; a sign-in link is on its way.</span>
             </div>
-            <script>
-              setTimeout(() => {
-                const toast = document.getElementById('magic-link-toast');
-                if (toast) {
-                  toast.style.opacity = '0';
-                  setTimeout(() => toast.remove(), 300);
-                }
-              }, 4000);
-            </script>
             """
         )
     return JSONResponse({"ok": True})
@@ -120,16 +115,21 @@ async def magic_link(request: Request, email: str = Form(...)):
 # ---------------------------------------------------------------------------
 
 @router.get("/callback")
-async def callback():
+async def callback(request: Request):
     """
     Supabase lands here with tokens in the URL hash.
     JS reads the hash and POSTs them to /auth/set-session.
+
+    This is raw HTML (not a Jinja template), so the CSP nonce is injected
+    manually: the app's script-src has no 'unsafe-inline', so without a
+    matching nonce the browser would block this script and login would hang.
     """
+    nonce = getattr(request.state, "csp_nonce", "")
     html = """<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Signing in…</title></head>
 <body>
-<script>
+<script nonce="__CSP_NONCE__">
   (function () {
     var params = Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
     if (!params.access_token) {
@@ -157,7 +157,7 @@ async def callback():
 </p>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=html.replace("__CSP_NONCE__", nonce))
 
 
 # ---------------------------------------------------------------------------

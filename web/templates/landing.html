@@ -209,6 +209,19 @@
       window.history.replaceState({}, document.title, "/");
     }
   })();
+
+  // Auto-dismiss the magic-link toast after it is swapped in by HTMX. The
+  // dismissal lives here (in a nonced, page-level script) rather than as an
+  // inline <script> inside the swapped fragment — an HTMX-injected script
+  // carries no valid CSP nonce and would be blocked.
+  document.body.addEventListener("htmx:afterSwap", function (e) {
+    var toast = document.getElementById("magic-link-toast");
+    if (!toast) return;
+    setTimeout(function () {
+      toast.style.opacity = "0";
+      setTimeout(function () { toast.remove(); }, 300);
+    }, 4000);
+  });
 </script>
 </body>
 </html>
