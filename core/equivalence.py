@@ -445,8 +445,12 @@ def _build_sqlite_db(counterexample_db: dict, schema: SchemaModel) -> sqlite3.Co
         col_list = ", ".join(col_names)
         for row in rows:
             values = [row[c] for c in col_names]
+            # Safe: row values are parameterized (see `values` below); only
+            # identifiers (table/column names) are interpolated, and those come
+            # from a sqlglot-parsed SchemaModel, not raw user text. SQLite can't
+            # bind identifiers, and this targets a throwaway :memory: DB.
             cur.execute(
-                f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})",
+                f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})",  # nosec B608
                 values,
             )
 

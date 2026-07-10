@@ -40,15 +40,22 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - name: Install dependencies + pip-audit
+      - name: Install dependencies + audit tools
         run: |
           pip install -r requirements.txt
-          pip install pip-audit
+          pip install pip-audit bandit==1.9.4
       - name: Audit installed dependencies for known CVEs
         # Audits the full resolved environment (incl. transitive deps).
         # To accept a specific advisory you can't fix yet, add:
         #   pip-audit --ignore-vuln GHSA-xxxx-xxxx-xxxx
         run: pip-audit
+      - name: Static security scan (SAST)
+        # Scans our own code for security issues (hardcoded secrets, weak
+        # crypto, injection, etc.). Config (excludes) lives in pyproject.toml.
+        # -ll fails only on Medium+ severity; -ii requires Medium+ confidence,
+        # so low-confidence noise doesn't block the Render deploy. Justified
+        # findings are suppressed inline with `# nosec <rule>` + a reason.
+        run: bandit -c pyproject.toml -r . -ll -ii
   notify:
     name: Discord notification
     runs-on: ubuntu-latest

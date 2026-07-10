@@ -1,0 +1,6 @@
+[tool.bandit]
+# Static security scan (SAST) config — see .github/workflows/ci.yml.
+# Excludes test suites (assert-heavy, self-stubbed) and virtualenvs.
+# Note: exclude_dirs uses path matching here and handles bare names
+# correctly, unlike the CLI `-x` glob semantics.
+exclude_dirs = ["tests", ".venv", "venv", "env"]
