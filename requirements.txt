@@ -19,4 +19,4 @@ sqlglot >= 30.12.0
 markdown>=3.10.2
 nh3>=0.3.6
 slowapi>=0.1.9
-sentry-sdk[fastapi]>=2.0.0
+sentry-sdk[fastapi]>=2.64.0
