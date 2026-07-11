@@ -170,8 +170,15 @@
         </div>
 
         <!-- Raw JSON view -->
-        <div id="view-json" style="display:none;">
-            <pre class="raw-json">{{ {
+        <div id="view-json" style="display:none; position: relative;">
+            <button class="btn btn-secondary copy-json-btn" style="position: absolute; top: 0.5rem; right: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 0.25rem;" title="Copy JSON">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              Copy
+            </button>
+            <pre class="raw-json" style="padding-top: 2.5rem;">{{ {
                 "status": result.status,
                 "divergence_reason": result.divergence_reason,
                 "counterexample_db": result.counterexample_db,

@@ -185,6 +185,11 @@ h1, h2, h3, h4 {
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   flex-shrink: 0;
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel-left.collapsed {
+  margin-left: -400px;
 }
 
 .panel-right {
