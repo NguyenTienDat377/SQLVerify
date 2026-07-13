@@ -1,0 +1,128 @@
+"""SQLVerify MCP server — a thin stdio proxy.
+
+Exposes SQLVerify's formal SQL-equivalence engine as an MCP tool that AI agents
+(Claude Code, Claude Desktop, Cursor, etc.) can call in-loop. It holds no solver
+itself: it forwards to a hosted SQLVerify instance's POST /api/verify/text
+endpoint, authenticated with the user's per-user `sqv_` API key.
+
+Run locally over stdio:
+    SQLVERIFY_API_KEY=sqv_... python sqlverify_mcp.py
+
+Or point the MCP client's command at this file (see README.md).
+"""
+import os
+
+import httpx
+from mcp.server.fastmcp import FastMCP
+
+# Where the hosted SQLVerify lives. Override for local dev (http://localhost:8000).
+BASE_URL = os.environ.get("SQLVERIFY_URL", "https://sqlverify.com").rstrip("/")
+
+# A per-user API key minted in the SQLVerify UI (Keys page). Required — the
+# endpoint is metered against this user's quota, so we fail fast without one.
+API_KEY = os.environ.get("SQLVERIFY_API_KEY")
+
+# httpx timeout must sit above SQLVerify's CI ceiling (120s solve) plus slack.
+_HTTP_TIMEOUT_S = 130.0
+
+mcp = FastMCP("sqlverify")
+
+
+@mcp.tool()
+async def verify_sql_equivalence(
+    ddl_sql: str,
+    sql_v1: str,
+    sql_v2: str,
+    bound: int = 3,
+) -> dict:
+    """Formally prove whether two SQL SELECT queries are semantically equivalent
+    under a given schema, using Z3/SMT solving.
+
+    Use this to check an AI-rewritten query against the original BEFORE trusting
+    it: unlike running the query, this proves the rewrite preserves meaning, or
+    returns a concrete counterexample database where the two queries diverge.
+
+    Returns the raw SQLVerify result JSON:
+      - status: "equivalent" | "divergent" | "unknown" | "error"
+          equivalent → the rewrite is safe (within the bound).
+          divergent  → they differ; see counterexample_db + the query outputs.
+          unknown    → solver timed out (no verdict — do NOT treat as equivalent).
+          error      → unsupported SQL / bad input; see error_message.
+      - divergence_reason: plain-English summary when divergent.
+      - counterexample_db: {table: [rows]} database that makes them differ.
+      - query_v1_output / query_v2_output: each query's result on that database.
+      - error_message: populated only when status is "error".
+
+    Supported SQL subset (anything outside is rejected as status "error", never
+    silently ignored): single SELECT; any number of INNER joins OR exactly one
+    LEFT/RIGHT join; JOIN ON must be a single column equality; WHERE/HAVING are
+    AND-chains of comparisons and IS [NOT] NULL (no OR/IN/BETWEEN/LIKE);
+    GROUP BY / aggregates supported. No CTEs, window functions, subqueries,
+    UNION, DISTINCT, SELECT *, or LIMIT.
+
+    Args:
+        ddl_sql: Flyway-style CREATE TABLE DDL defining the schema.
+        sql_v1:  The original / trusted SQL SELECT query.
+        sql_v2:  The rewritten (e.g. AI-generated) query to check against v1.
+        bound:   Max rows per table Z3 explores (default 3). An "equivalent"
+                 verdict is sound only within this bound; raising it finds rarer
+                 bugs but is slower and may time out (status "unknown").
+    """
+    if not API_KEY:
+        return {
+            "status": "error",
+            "error_message": (
+                "SQLVERIFY_API_KEY is not set. Mint a key in the SQLVerify UI "
+                "(Keys page) and pass it to this MCP server via the "
+                "SQLVERIFY_API_KEY environment variable."
+            ),
+        }
+
+    payload = {"ddl_sql": ddl_sql, "sql_v1": sql_v1, "sql_v2": sql_v2, "bound": bound}
+    try:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BASE_URL}/api/verify/text",
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        # Network/transport failure reaching SQLVerify — surface it as a tool
+        # error rather than raising, so the agent gets an actionable message.
+        return {
+            "status": "error",
+            "error_message": f"Could not reach SQLVerify at {BASE_URL}: {exc}",
+        }
+
+    if resp.status_code == 402:
+        return {
+            "status": "error",
+            "error_message": (
+                "SQLVerify free-tier monthly quota exhausted for this API key. "
+                "Upgrade the plan or wait for the next UTC calendar month."
+            ),
+        }
+    if resp.status_code == 401:
+        return {
+            "status": "error",
+            "error_message": "SQLVerify rejected the API key (401). Check SQLVERIFY_API_KEY.",
+        }
+    if resp.status_code == 429:
+        return {
+            "status": "error",
+            "error_message": "SQLVerify rate limit hit (429). Slow down and retry shortly.",
+        }
+
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return {
+            "status": "error",
+            "error_message": f"SQLVerify returned HTTP {resp.status_code}: {exc}",
+        }
+
+    return resp.json()  # VerifyResponse, verbatim
+
+
+if __name__ == "__main__":
+    mcp.run()  # stdio transport by default
