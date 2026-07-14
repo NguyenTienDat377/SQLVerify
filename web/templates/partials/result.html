@@ -178,12 +178,16 @@
               </svg>
               Copy
             </button>
+            <!-- Mirrors the VerifyResponse returned by POST /api/verify/text so the
+                 copied payload is a faithful reference for the CI/JSON endpoint. -->
             <pre class="raw-json" style="padding-top: 2.5rem;">{{ {
                 "status": result.status,
                 "divergence_reason": result.divergence_reason,
                 "counterexample_db": result.counterexample_db,
                 "query_v1_output": result.query_v1_output,
-                "query_v2_output": result.query_v2_output
+                "query_v2_output": result.query_v2_output,
+                "error_message": result.error_message,
+                "explanation": result.explanation
             } | tojson(indent=2) }}</pre>
         </div>
 

@@ -10,10 +10,11 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 
 **Core value proposition:** Deterministic formal verification as an antidote to probabilistic AI output — proof that a query does what it's intended to do, not just that it runs.
 
-**Two delivery surfaces (same core engine):**
+**Three delivery surfaces (same core engine):**
 
 - **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`, on-demand "Explain" button).
 - **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results.
+- **MCP tool** — AI coding agents (Claude Code/Desktop, Cursor, …) call verification *in-loop* via a thin stdio proxy (`mcp/`) that forwards to `POST /api/verify/text`. Enables the counterexample-driven self-healing loop: an agent proposes a rewrite, gets a proof or a concrete counterexample, and revises against ground truth until proven equivalent (`mcp/examples/repair_loop.py`).
 
 **Future function** - Check the queries if it fits business input via a box of users' expected
 
@@ -85,6 +86,13 @@ SQLVerify/
 │
 ├── auth/                           # ✅ DONE — JWTMiddleware (Supabase JWKS) + per-user API-key path
 │   └── middleware.py
+│
+├── mcp/                            # ✅ DONE — MCP delivery surface (standalone; own .venv, only needs mcp+httpx)
+│   ├── sqlverify_mcp.py            #   FastMCP stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer sqv_ key)
+│   ├── requirements.txt            #   mcp + httpx (NOT the app's deps)
+│   ├── README.md                   #   setup + Claude Code/Desktop connect + Inspector test
+│   └── examples/
+│       └── repair_loop.py          #   counterexample-driven self-healing loop demo (toy agent_revise; swap for a real Claude call)
 │
 └── web/
     ├── static/
@@ -293,6 +301,7 @@ SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude # claude | openai | google
 SITE_URL=                 # full origin, e.g. https://sqlverify.com (no trailing slash) — used by auth redirects + CORS
+ENABLE_DOCS=              # optional — set "true" to serve /docs, /redoc, /openapi.json; unset (default) 404s them in prod
 
 # Billing (Lemon Squeezy)
 LEMONSQUEEZY_WEBHOOK_SECRET=   # Settings → Webhooks (HMAC signing secret)

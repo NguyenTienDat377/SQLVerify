@@ -31,7 +31,14 @@ from starlette.routing import Match
 from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
 _PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
-_PUBLIC_EXACT = {"/", "/docs", "/openapi.json", "/api/verify/health", "/pricing", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping"}
+_PUBLIC_EXACT = {"/", "/api/verify/health", "/pricing", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping"}
+
+# /docs, /redoc, /openapi.json are gated by ENABLE_DOCS (mirrors main.py). When
+# enabled they must be auth-exempt so the browser can load Swagger UI + schema
+# without a session; when disabled FastAPI never registers them, so an
+# unauthenticated request falls through to a real 404 via _route_exists().
+_DOCS_ENABLED = os.getenv("ENABLE_DOCS", "").lower() == "true"
+_PUBLIC_PREFIXES_DOCS = ("/docs", "/redoc", "/openapi.json")
 
 _jwks_client: PyJWKClient | None = None
 
@@ -48,6 +55,8 @@ def _get_jwks_client() -> PyJWKClient:
 
 def _is_public(path: str) -> bool:
     if path in _PUBLIC_EXACT:
+        return True
+    if _DOCS_ENABLED and any(path.startswith(p) for p in _PUBLIC_PREFIXES_DOCS):
         return True
     return any(path.startswith(p) for p in _PUBLIC_PREFIXES)
 

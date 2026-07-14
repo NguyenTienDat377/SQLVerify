@@ -92,11 +92,19 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("SQLVerify shutting down")
 
+# API docs are gated behind ENABLE_DOCS so the interactive docs + raw OpenAPI
+# schema aren't publicly reachable in production. Unset/false → FastAPI serves a
+# real 404 for /docs, /redoc, and /openapi.json (nothing to allowlist).
+_DOCS_ENABLED = os.getenv("ENABLE_DOCS", "").lower() == "true"
+
 app = FastAPI(
     title="SQLVerify",
     description="Formal verification for AI-generated SQL queries.",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
 
 # Rate limiting (slowapi): the limiter is defined with the verify routes; it must

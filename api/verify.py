@@ -69,6 +69,9 @@ class VerifyResponse(BaseModel):
     query_v1_output: Optional[list] = None
     query_v2_output: Optional[list] = None
     error_message: Optional[str] = None
+    # Human-readable LLM explanation, already generated for divergent results
+    # (see verify_equivalence_text). Null when not applicable/unavailable.
+    explanation: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +184,7 @@ def _result_to_response(result: VerificationResult) -> VerifyResponse:
         query_v1_output=result.query_v1_output,
         query_v2_output=result.query_v2_output,
         error_message=result.error_message,
+        explanation=result.explanation,
     )
 
 

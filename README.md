@@ -35,12 +35,13 @@ SQLVerify is the missing guardrail between AI-generated SQL and your production 
 
 ---
 
-## Two delivery surfaces, one engine
+## Three delivery surfaces, one engine
 
-The same Z3 core powers two ways to use SQLVerify:
+The same Z3 core powers three ways to use SQLVerify:
 
 - **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`) with an on-demand **Explain** button. Snappy timeout (default 15s).
 - **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), authenticated with a per-user API key and always explaining divergent results. Verdict-favouring timeout (default 60s).
+- **MCP tool** — AI coding agents (Claude Code/Desktop, Cursor, …) call verification **in-loop** via a thin stdio proxy ([`mcp/`](mcp/)) that forwards to the JSON endpoint. This powers a counterexample-driven **self-healing loop**: an agent proposes a rewrite, gets a proof or a concrete counterexample, and revises against ground truth until proven equivalent ([`mcp/examples/repair_loop.py`](mcp/examples/repair_loop.py)).
 
 ---
 
@@ -132,6 +133,10 @@ sqlverify/
 ├── db/                      # Supabase client + repositories (service key, scoped by user_id in code)
 │   ├── client.py
 │   └── repositories/        # verification_runs, subscriptions, api_keys, projects
+│
+├── mcp/                     # MCP surface — standalone stdio proxy (own .venv; only needs mcp+httpx)
+│   ├── sqlverify_mcp.py     # FastMCP server: tool verify_sql_equivalence() → POST /api/verify/text
+│   └── examples/            # repair_loop.py — counterexample-driven self-healing agent loop
 │
 └── web/                     # Jinja2 + HTMX frontend
     ├── templates/           # base, landing, verify, pricing, keys, projects, terms, privacy, 404, 500
@@ -263,13 +268,13 @@ All suites are standalone (pytest-compatible but no pytest required): `.venv/bin
 
 ## Roadmap
 
-**Current** — Equivalence checking via web UI **and** CI/CD JSON endpoint, with GitHub/magic-link auth, per-user API keys & projects, and Lemon Squeezy billing.
+**Current** — Equivalence checking via web UI, CI/CD JSON endpoint, **and** an MCP tool for in-loop AI agents, with GitHub/magic-link auth, per-user API keys & projects, and Lemon Squeezy billing.
 
 **Next** — Widen the supported SQL subset (see the SQL-subset-expansion roadmap), single-query constraint checking (Direction 2), and business-intent checks against a user-supplied expectation.
 
 **Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap), PostHog.
 
-**AI Agent Guardrails** -For Self Healing AI Agents
+**AI Agent Guardrails** — for self-healing AI agents. Foundations shipped: the MCP surface ([`mcp/`](mcp/)) and a counterexample-driven repair-loop demo ([`mcp/examples/repair_loop.py`](mcp/examples/repair_loop.py)). Next: a published `sqlverify-mcp` package and a hosted (remote) MCP server so agents connect without a local install.
 
 ---
 
