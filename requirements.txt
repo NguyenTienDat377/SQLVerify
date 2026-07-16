@@ -20,3 +20,4 @@ markdown>=3.10.2
 nh3>=0.3.6
 slowapi>=0.1.9
 sentry-sdk[fastapi]>=2.64.0
+posthog>=3.7.0

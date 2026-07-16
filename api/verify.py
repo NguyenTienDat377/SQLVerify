@@ -35,6 +35,11 @@ from typing import Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from core.analytics import (
+    capture_verification_run,
+    capture_quota_exceeded,
+    capture_explanation_requested,
+)
 from core.equivalence import check_equivalence
 from core.models import VerificationResult
 
@@ -122,6 +127,9 @@ async def _enforce_quota(request: Request):
     if used < FREE_TIER_MONTHLY_LIMIT:
         return None
 
+    surface = "web" if "hx-request" in request.headers else "ci"
+    capture_quota_exceeded(user_id=user_id, surface=surface, runs_used=used)
+
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
             request=request,
@@ -140,6 +148,20 @@ async def _enforce_quota(request: Request):
             "limit": FREE_TIER_MONTHLY_LIMIT,
         },
     )
+
+
+def _resolve_surface(request: Request) -> str:
+    """Which delivery surface made this call: "ci" | "mcp".
+
+    Both the CI/CD clients and the MCP proxy POST to /api/verify/text, so the
+    endpoint alone can't tell pipeline traffic from AI-agent traffic. The MCP
+    server identifies itself via User-Agent (see mcp/sqlverify_mcp.py); anything
+    else is treated as a pipeline client. Analytics-only — this never affects
+    auth, quota, or the verdict, so a spoofed UA costs nothing but a mislabelled
+    event.
+    """
+    ua = (request.headers.get("user-agent") or "").lower()
+    return "mcp" if ua.startswith("sqlverify-mcp/") else "ci"
 
 
 async def _resolve_project_id(user_id: Optional[str], project_id: Optional[str]) -> Optional[str]:
@@ -246,6 +268,10 @@ async def verify_equivalence(
     proj_id = await _resolve_project_id(user_id, project_id)
     run_id = await save_run(result, ddl_sql, v1_sql, v2_sql, dialect, duration_ms,
                             user_id=user_id, project_id=proj_id)
+    capture_verification_run(
+        user_id=user_id, status=result.status, surface="web",
+        duration_ms=duration_ms, bound=bound, dialect=dialect, project_id=proj_id,
+    )
 
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
@@ -291,6 +317,7 @@ async def generate_explanation(run_id: str, request: Request):
         error_message=row["error_message"],
     )
 
+    capture_explanation_requested(user_id=requester_id)
     explanation = await explain_result(result, row["sql_v1"], row["sql_v2"])
     await update_explanation(run_id, explanation)
 
@@ -355,6 +382,11 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
     proj_id = await _resolve_project_id(user_id, body.project_id)
     await save_run(result, body.ddl_sql, body.sql_v1, body.sql_v2,
                    body.dialect, duration_ms, user_id=user_id, project_id=proj_id)
+    capture_verification_run(
+        user_id=user_id, status=result.status, surface=_resolve_surface(request),
+        duration_ms=duration_ms, bound=body.bound, dialect=body.dialect,
+        project_id=proj_id,
+    )
 
     return _result_to_response(result)
 

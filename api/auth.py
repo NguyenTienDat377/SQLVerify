@@ -12,6 +12,8 @@ then POSTs the tokens to /auth/set-session, which sets HttpOnly cookies
 and the browser redirects to /verify.
 """
 
+import base64
+import json
 import os
 from typing import Optional
 
@@ -22,6 +24,8 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from loguru import logger
 from pydantic import BaseModel
 
+from core.analytics import capture_user_login, capture_user_logout, identify_user
+
 # Share the single app limiter (registered on app.state.limiter in main.py) rather
 # than spinning up a second instance — one bucket, one source of truth.
 from api.verify import limiter
@@ -29,6 +33,18 @@ from api.verify import limiter
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 _COOKIE_OPTS = dict(httponly=True, samesite="lax")
+
+
+def _jwt_claims(token: str) -> dict:
+    """Decode JWT payload without verifying signature — reads Supabase claims."""
+    try:
+        payload = token.split(".")[1]
+        padding = 4 - len(payload) % 4
+        if padding != 4:
+            payload += "=" * padding
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
 
 def _is_secure(request: Request) -> bool:
     return os.getenv("SITE_URL", str(request.base_url)).startswith("https://")
@@ -173,6 +189,11 @@ class SessionBody(BaseModel):
 @router.post("/set-session")
 async def set_session(body: SessionBody, request: Request):
     logger.info("Session established via implicit flow")
+    claims = _jwt_claims(body.access_token)
+    user_id = claims.get("sub")
+    email = claims.get("email")
+    identify_user(user_id=user_id or "", email=email)
+    capture_user_login(user_id=user_id, auth_method="supabase")
     secure = _is_secure(request)
     response = JSONResponse({"ok": True})
     response.set_cookie(
@@ -199,7 +220,9 @@ async def set_session(body: SessionBody, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.post("/logout")
-async def logout():
+async def logout(request: Request):
+    user_id = getattr(request.state, "user_id", None)
+    capture_user_logout(user_id=user_id)
     logger.info("User logged out")
     response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie("sb-access-token")

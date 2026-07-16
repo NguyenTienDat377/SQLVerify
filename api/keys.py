@@ -12,6 +12,7 @@ scopes each operation to the current user. Responses are HTMX partials.
 from fastapi import APIRouter, Form, Request
 from fastapi.templating import Jinja2Templates
 
+from core.analytics import capture_api_key_created, capture_api_key_revoked
 from db.repositories.api_keys import create_api_key, list_api_keys, revoke_api_key
 
 router = APIRouter(prefix="/api/keys", tags=["api-keys"])
@@ -37,6 +38,7 @@ async def list_keys(request: Request):
 async def create_key(request: Request, name: str = Form("API key")):
     user_id = request.state.user_id
     raw_key, _ = await create_api_key(user_id, name)
+    capture_api_key_created(user_id=user_id)
     # raw_key is shown exactly once, in the returned partial.
     return _panel(request, await list_api_keys(user_id), new_key=raw_key)
 
@@ -45,4 +47,5 @@ async def create_key(request: Request, name: str = Form("API key")):
 async def revoke_key(request: Request, key_id: str):
     user_id = request.state.user_id
     await revoke_api_key(user_id, key_id)
+    capture_api_key_revoked(user_id=user_id)
     return _panel(request, await list_api_keys(user_id))

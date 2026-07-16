@@ -25,6 +25,13 @@ API_KEY = os.environ.get("SQLVERIFY_API_KEY")
 # httpx timeout must sit above SQLVerify's CI ceiling (120s solve) plus slack.
 _HTTP_TIMEOUT_S = 130.0
 
+# Identifies agent traffic to the server. /api/verify/text is shared with CI/CD
+# clients, so this User-Agent is the only thing that lets SQLVerify tell in-loop
+# AI-agent calls apart from pipeline calls (see api/verify.py:_resolve_surface).
+# Analytics-only — it never affects auth, quota, or the verdict.
+_VERSION = "0.1.0"
+_USER_AGENT = f"sqlverify-mcp/{_VERSION}"
+
 mcp = FastMCP("sqlverify")
 
 
@@ -83,7 +90,10 @@ async def verify_sql_equivalence(
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BASE_URL}/api/verify/text",
-                headers={"Authorization": f"Bearer {API_KEY}"},
+                headers={
+                    "Authorization": f"Bearer {API_KEY}",
+                    "User-Agent": _USER_AGENT,
+                },
                 json=payload,
             )
     except httpx.HTTPError as exc:

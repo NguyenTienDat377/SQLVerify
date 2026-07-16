@@ -29,6 +29,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from core.logger import setup_logging
+from core.analytics import init_analytics, shutdown_analytics
 from loguru import logger
 from api.verify import router as verify_router, limiter
 from api.auth import router as auth_router
@@ -88,8 +89,10 @@ def _validate_required_env() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _validate_required_env()
+    init_analytics()
     logger.info("SQLVerify starting up")
     yield
+    shutdown_analytics()  # flush queued events so the last runs aren't lost
     logger.info("SQLVerify shutting down")
 
 # API docs are gated behind ENABLE_DOCS so the interactive docs + raw OpenAPI

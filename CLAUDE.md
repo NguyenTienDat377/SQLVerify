@@ -302,6 +302,8 @@ SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude # claude | openai | google
 SITE_URL=                 # full origin, e.g. https://sqlverify.com (no trailing slash) — used by auth redirects + CORS
 ENABLE_DOCS=              # optional — set "true" to serve /docs, /redoc, /openapi.json; unset (default) 404s them in prod
+POSTHOG_API_KEY=          # optional — PostHog project key; unset disables analytics entirely (no-op)
+POSTHOG_HOST=             # optional — https://us.i.posthog.com (default) | https://eu.i.posthog.com
 
 # Billing (Lemon Squeezy)
 LEMONSQUEEZY_WEBHOOK_SECRET=   # Settings → Webhooks (HMAC signing secret)

@@ -1,0 +1,52 @@
+[
+  {
+    "event_name": "user_logged_in",
+    "event_description": "Fired when a user establishes a session via GitHub OAuth or magic link.",
+    "file": "api/auth.py"
+  },
+  {
+    "event_name": "user_logged_out",
+    "event_description": "Fired when a user explicitly logs out.",
+    "file": "api/auth.py"
+  },
+  {
+    "event_name": "checkout_initiated",
+    "event_description": "Fired when a user is redirected to the Lemon Squeezy checkout page for a plan.",
+    "file": "api/billing.py"
+  },
+  {
+    "event_name": "subscription_updated",
+    "event_description": "Fired when a Lemon Squeezy subscription lifecycle event is received (created, cancelled, expired, etc.).",
+    "file": "api/webhooks.py"
+  },
+  {
+    "event_name": "project_created",
+    "event_description": "Fired when a user successfully creates a new project.",
+    "file": "api/projects.py"
+  },
+  {
+    "event_name": "project_deleted",
+    "event_description": "Fired when a user deletes one of their projects.",
+    "file": "api/projects.py"
+  },
+  {
+    "event_name": "api_key_created",
+    "event_description": "Fired when a user creates a new API key for CI/CD access.",
+    "file": "api/keys.py"
+  },
+  {
+    "event_name": "api_key_revoked",
+    "event_description": "Fired when a user revokes an existing API key.",
+    "file": "api/keys.py"
+  },
+  {
+    "event_name": "quota_exceeded",
+    "event_description": "Fired when a free-tier user hits their monthly verification run limit.",
+    "file": "api/verify.py"
+  },
+  {
+    "event_name": "explanation_requested",
+    "event_description": "Fired when a user requests an AI-generated explanation for a divergent run.",
+    "file": "api/verify.py"
+  }
+]

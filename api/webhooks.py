@@ -28,6 +28,7 @@ import os
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from core.analytics import capture_subscription_event
 from db.repositories.subscriptions import upsert_subscription
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
@@ -157,5 +158,11 @@ async def lemonsqueezy_webhook(
         user_id=user_id,
     )
 
+    capture_subscription_event(
+        user_id=user_id,
+        event_type=event_name,
+        tier=tier,
+        status=status,
+    )
     print(f"[webhooks] {event_name} → {customer_email} ({tier}, {status}, user={user_id})")
     return JSONResponse({"received": True, "handled": True, "event": event_name})

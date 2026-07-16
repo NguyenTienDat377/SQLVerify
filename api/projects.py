@@ -11,6 +11,7 @@ scopes each operation to the current user. Responses are HTMX partials.
 from fastapi import APIRouter, Form, Request
 from fastapi.templating import Jinja2Templates
 
+from core.analytics import capture_project_created, capture_project_deleted
 from db.repositories.projects import (
     create_project,
     delete_project,
@@ -48,6 +49,8 @@ async def create_user_project(
     if created is None:
         # Most likely an empty/duplicate name (UNIQUE owner_id, name).
         error = "Couldn't create that project — check the name isn't blank or already used."
+    else:
+        capture_project_created(user_id=user_id)
     return _panel(request, await list_projects(user_id), error=error)
 
 
@@ -55,4 +58,5 @@ async def create_user_project(
 async def delete_user_project(request: Request, project_id: str):
     user_id = request.state.user_id
     await delete_project(user_id, project_id)
+    capture_project_deleted(user_id=user_id)
     return _panel(request, await list_projects(user_id))

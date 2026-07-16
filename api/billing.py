@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from loguru import logger
 
+from core.analytics import capture_checkout_initiated
 from db.repositories.subscriptions import get_active_subscription_by_user
 
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -55,6 +56,7 @@ async def checkout(request: Request, plan: str = "individual"):
         params["checkout[email]"] = email
 
     sep = "&" if "?" in base_url else "?"
+    capture_checkout_initiated(user_id=user_id, plan=plan)
     return RedirectResponse(url=f"{base_url}{sep}{urlencode(params)}", status_code=303)
 
 
