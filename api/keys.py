@@ -13,7 +13,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.templating import Jinja2Templates
 
 from core.analytics import capture_api_key_created, capture_api_key_revoked
-from db.repositories.api_keys import create_api_key, list_api_keys, revoke_api_key
+from db.repositories.api_keys import create_api_key, list_api_keys, revoke_api_key, delete_api_key
 
 router = APIRouter(prefix="/api/keys", tags=["api-keys"])
 templates = Jinja2Templates(directory="web/templates")
@@ -48,4 +48,11 @@ async def revoke_key(request: Request, key_id: str):
     user_id = request.state.user_id
     await revoke_api_key(user_id, key_id)
     capture_api_key_revoked(user_id=user_id)
+    return _panel(request, await list_api_keys(user_id))
+
+
+@router.delete("/{key_id}")
+async def delete_key(request: Request, key_id: str):
+    user_id = request.state.user_id
+    await delete_api_key(user_id, key_id)
     return _panel(request, await list_api_keys(user_id))

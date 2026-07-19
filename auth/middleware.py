@@ -127,9 +127,6 @@ class JWTMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        if _is_public(request.url.path):
-            return await call_next(request)
-
         cookie_token = request.cookies.get("sb-access-token")
         auth_header = request.headers.get("Authorization", "")
         bearer = auth_header[7:] if auth_header.startswith("Bearer ") else None
@@ -162,6 +159,10 @@ class JWTMiddleware(BaseHTTPMiddleware):
                     auth_method = "api_key"
 
         if not user_id:
+            # If public route, allow it without setting user_id
+            if _is_public(request.url.path):
+                return await call_next(request)
+                
             # No such route → let it fall through to a real 404 (rendered by the
             # 404 handler) rather than redirecting/401-ing on a nonexistent path.
             if not _route_exists(request):

@@ -65,17 +65,18 @@
           SQLVerify
         </a>
         <div class="topbar-user">
-          <a href="/pricing" class="topbar-link">Pricing</a>
           {% if user_email %}
           <span class="topbar-email">{{ user_email }}</span>
           <a href="/verify" class="topbar-link">Verify</a>
           <a href="/projects" class="topbar-link">Projects</a>
           <a href="/keys" class="topbar-link">API Keys</a>
+          <a href="/integrations" class="topbar-link">Integrations</a>
           <a href="/billing/portal" class="topbar-link">Billing</a>
           <form method="post" action="/auth/logout" style="display: inline">
             <button type="submit" class="btn-logout">Sign out</button>
           </form>
           {% else %}
+          <a href="/pricing" class="topbar-link">Pricing</a>
           <a href="/auth/login" class="btn-github-login">
             <svg
               xmlns="http://www.w3.org/2000/svg"

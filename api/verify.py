@@ -443,3 +443,43 @@ async def history_detail(run_id: str, request: Request):
         name="partials/result.html",
         context={"result": result, "run_id": run_id}
     )
+
+# ---------------------------------------------------------------------------
+# POST /api/verify/extract-constraints — Parse DDL and preview schema
+# ---------------------------------------------------------------------------
+@router.post("/verify/extract-constraints")
+async def extract_constraints(
+    request: Request,
+    schema_file: Optional[UploadFile] = File(None),
+    schema_text: str = Form(""),
+    dialect: str = Form("generic"),
+):
+    from core.ddl_parser import parse_ddl
+    
+    try:
+        sql = ""
+        if schema_text and schema_text.strip():
+            sql = schema_text.strip()
+        elif schema_file and schema_file.filename:
+            content = await schema_file.read()
+            sql = content.decode("utf-8")
+            
+        if not sql.strip():
+            return templates.TemplateResponse(
+                request=request,
+                name="partials/schema_summary.html",
+                context={"schema": None, "error": None}
+            )
+            
+        schema = parse_ddl(sql, dialect=dialect)
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/schema_summary.html",
+            context={"schema": schema, "error": None}
+        )
+    except Exception as e:
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/schema_summary.html",
+            context={"schema": None, "error": str(e)}
+        )

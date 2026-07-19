@@ -316,7 +316,12 @@ async def sitemap_xml():
 
 @app.get("/")
 async def root(request: Request):
-    return templates.TemplateResponse(request=request, name="landing.html")
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request, 
+        name="landing.html", 
+        context={"user_email": user_email}
+    )
 
 
 @app.get("/verify")
@@ -373,6 +378,16 @@ async def keys_page(request: Request):
         request=request,
         name="keys.html",
         context={"user_email": user_email, "keys": keys},
+    )
+
+
+@app.get("/integrations")
+async def integrations_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="integrations.html",
+        context={"user_email": user_email},
     )
 
 

@@ -103,6 +103,23 @@ async def revoke_api_key(user_id: str, key_id: str) -> bool:
         return False
 
 
+async def delete_api_key(user_id: str, key_id: str) -> bool:
+    """Permanently delete a key the user owns."""
+    try:
+        client = get_client()
+        (
+            client.table("api_keys")
+            .delete()
+            .eq("id", key_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return True
+    except Exception as e:
+        logger.error("Failed to delete API key {kid}: {err}", kid=key_id, err=e)
+        return False
+
+
 async def resolve_api_key(raw_key: str) -> Optional[str]:
     """
     Map a raw API key to its owning user_id, or None if unknown/revoked.

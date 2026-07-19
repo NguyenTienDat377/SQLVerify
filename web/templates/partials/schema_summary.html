@@ -1,0 +1,44 @@
+{% if error %}
+<div style="color: #ef4444; font-size: 0.875rem;">
+    <strong>Error parsing schema:</strong><br/>
+    {{ error }}
+</div>
+{% elif not schema or not schema.tables %}
+<div style="color: var(--text-secondary); font-size: 0.875rem;">
+    Upload schema to extract constraints...<br />
+    > Primary Keys<br />
+    > Foreign Keys<br />
+    > Not Null
+</div>
+{% else %}
+<div style="font-size: 0.875rem; color: var(--text-primary); max-height: 300px; overflow-y: auto; padding-right: 0.5rem;">
+    {% for table_name, table in schema.tables.items() %}
+    <div style="margin-bottom: 1rem;">
+        <strong style="color: var(--primary-color);">{{ table.name }}</strong>
+        <ul style="list-style-type: none; padding-left: 0.5rem; margin-top: 0.25rem; color: var(--text-primary); font-size: 0.85rem;">
+            {% if table.primary_key_columns %}
+            <li>> PK: {{ table.primary_key_columns | join(', ') }}</li>
+            {% endif %}
+            
+            {% for fk in table.foreign_keys %}
+            <li>> FK: {{ fk.columns | join(', ') }} -> {{ fk.references_table }}({{ fk.references_columns | join(', ') }})</li>
+            {% endfor %}
+            
+            {% set not_nulls = [] %}
+            {% for col in table.columns %}
+                {% if not col.nullable and not col.primary_key %}
+                    {% set _ = not_nulls.append(col.name) %}
+                {% endif %}
+            {% endfor %}
+            {% if not_nulls %}
+            <li>> Not Null: {{ not_nulls | join(', ') }}</li>
+            {% endif %}
+            
+            {% if not table.primary_key_columns and not table.foreign_keys and not not_nulls %}
+            <li style="color: rgba(255,255,255,0.3);">> No constraints found</li>
+            {% endif %}
+        </ul>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Integrations - SQLVerify{% endblock %}
+
+{% block content %}
+<div class="panel" style="max-width: 800px; margin: 2rem auto; padding: 2rem;">
+  <div style="margin-bottom: 2rem;">
+    <h1 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Developer Integrations</h1>
+    <p style="color: var(--text-secondary);">Bring SQLVerify directly into your terminal, CI/CD pipeline, or IDE.</p>
+  </div>
+
+  <div style="margin-bottom: 3rem;">
+    <h2 style="font-size: 1.25rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+      Command Line Interface (CLI)
+    </h2>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+      Verify migrations and AI-generated queries from your terminal or automate them in GitHub Actions and GitLab CI.
+    </p>
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; margin-bottom: 1rem;">
+      pip install sqlverify-cli<br><br>
+      export SQLVERIFY_API_KEY="your_api_key_here"<br>
+      sqlverify check --schema schema.sql --v1 original.sql --v2 generated.sql
+    </div>
+    <a href="/keys" class="btn btn-secondary btn-small">Get your API Key</a>
+  </div>
+
+  <div>
+    <h2 style="font-size: 1.25rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+      Model Context Protocol (MCP) Server
+    </h2>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+      Let Claude Desktop, Cursor, or your favorite AI IDE verify queries automatically during code generation.
+    </p>
+    <p style="font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Claude Desktop Configuration (claude_desktop_config.json):</p>
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; overflow-x: auto; white-space: pre;">
+{
+  "mcpServers": {
+    "sqlverify": {
+      "command": "npx",
+      "args": ["-y", "@sqlverify/mcp-server"],
+      "env": {
+        "SQLVERIFY_API_KEY": "your_api_key_here"
+      }
+    }
+  }
+}
+    </div>
+  </div>
+</div>
+{% endblock %}
