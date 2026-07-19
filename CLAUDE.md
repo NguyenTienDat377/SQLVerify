@@ -13,7 +13,7 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 **Three delivery surfaces (same core engine):**
 
 - **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`, on-demand "Explain" button).
-- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results.
+- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results. Driven by the `sqlverify` CLI (`cli/`), which is also the intended engine of the planned GitHub Action.
 - **MCP tool** — AI coding agents (Claude Code/Desktop, Cursor, …) call verification *in-loop* via a thin stdio proxy (`mcp/`) that forwards to `POST /api/verify/text`. Enables the counterexample-driven self-healing loop: an agent proposes a rewrite, gets a proof or a concrete counterexample, and revises against ground truth until proven equivalent (`mcp/examples/repair_loop.py`).
 
 **Future function** - Check the queries if it fits business input via a box of users' expected
@@ -87,6 +87,12 @@ SQLVerify/
 ├── auth/                           # ✅ DONE — JWTMiddleware (Supabase JWKS) + per-user API-key path
 │   └── middleware.py
 │
+├── cli/                            # ✅ DONE (verify + diff) — CLI delivery surface (standalone; httpx is the only dep)
+│   ├── sqlverify_cli.py            #   argparse CLI: `sqlverify verify` / `sqlverify diff` → POST /api/verify/text
+│   ├── pyproject.toml              #   `pipx install ./cli` → `sqlverify` entry point (httpx only, never imports core/)
+│   ├── requirements.txt            #   httpx (NOT the app's deps)
+│   └── README.md                   #   install + flags + exit codes + output modes
+│
 ├── mcp/                            # ✅ DONE — MCP delivery surface (standalone; own .venv, only needs mcp+httpx)
 │   ├── sqlverify_mcp.py            #   FastMCP stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer sqv_ key)
 │   ├── requirements.txt            #   mcp + httpx (NOT the app's deps)
@@ -124,7 +130,14 @@ SQLVerify/
 
 ### core/
 - `models.py` — `Column`, `ForeignKey`, `Table`, `SchemaModel`, `VerificationResult` dataclasses
-- `ddl_parser.py` — parses Flyway-style DDL SQL into `SchemaModel` using sqlglot
+- `ddl_parser.py` — parses Flyway-style DDL SQL into `SchemaModel` using sqlglot.
+  Folds `ALTER TABLE` (ADD/DROP COLUMN, SET/DROP NOT NULL, ADD CONSTRAINT
+  FK/PK/CHECK/UNIQUE, DROP COLUMN, RENAME TABLE/COLUMN) into an already-parsed
+  schema in statement order, and `CREATE INDEX` is a no-op skip. Everything
+  else (CREATE VIEW, ALTER COLUMN TYPE, DROP CONSTRAINT, DML, ALTER-before-CREATE,
+  ...) raises `ValueError` — fail-closed, same as the rest of the engine. This
+  closed a real gap: concatenating a Flyway `migrations/` directory used to
+  silently drop every ALTER, encoding a schema weaker than reality.
 - `sql_encoder.py` — encodes a SELECT query + SchemaModel into Z3 `QueryFormula`
 - `equivalence.py` — takes two `QueryFormula` objects, runs Z3, returns `VerificationResult`
 
@@ -167,6 +180,43 @@ SQLVerify/
   - CI/API client — per-user API key (`Bearer sqv_…` or `X-API-Key`), resolved via the
     `api_keys` table with a ~60s per-process lookup cache.
 
+### cli/
+- `sqlverify_cli.py` — `sqlverify verify --ddl X --v1 A --v2 B`: a thin argparse client over
+  `POST /api/verify/text`. Any input may be `-` (stdin; at most one). Mirrors the server's
+  limits client-side (`bound` ≤ 6, `timeout_ms` ≤ 120000) so a typo costs no round trip.
+  Config via `SQLVERIFY_API_KEY` / `SQLVERIFY_URL` — **the same env names as `mcp/`**, one
+  setup for both surfaces. Sends a `sqlverify-cli/<v>` User-Agent so `_resolve_surface()`
+  can tell CLI traffic from MCP traffic.
+  - **Exit codes:** `0` policy pass, `1` policy fail, `2` the CLI's own failure (bad flags,
+    unreadable file, network, 401/402/429). Transport failure is deliberately `2`, never
+    `1` — a lapsed key must not be mistakable for a broken query.
+  - **`--fail-on`** (default `divergent`) is the gate policy: `unknown`/`error` warn loudly
+    but pass, because a check that reddens on the first CTE gets uninstalled. `unknown`
+    always prints "not a proof of equivalence", however it's gated.
+  - **`--output`** `auto` (human on a TTY, json when piped) | `human` | `json` (VerifyResponse
+    verbatim) | `github` (one annotation; its level follows `--fail-on`, so the check's colour
+    can't contradict the exit code).
+  - **`sqlverify diff --base REF --ddl PATH GLOB...`** — verifies every file matching `GLOB`
+    that changed since `--base` (working-tree version vs. the version at `git merge-base
+    --base HEAD`), so the same command gives the same answer locally on a dirty tree and in
+    CI after checkout. `--ddl` accepts a file, a directory, or a glob; a directory concatenates
+    in **numeric Flyway `V<n>__` order** (`V10` after `V2`, not lexicographic). Added/deleted
+    files are skipped with a stderr note, never silently dropped; `git ls-files --others` is
+    also consulted so a brand-new *unstaged* file isn't invisible to `git diff <ref>` (which
+    only sees paths already known to git). If `--ddl` itself changed since `--base`, every
+    pair is skipped (`ddl-changed`, a `--fail-on`-only pseudo-status; warn-and-pass by
+    default) — the engine needs one fixed schema for both queries. Multi-file exit code is
+    worst-of (`2` beats `1` beats `0`); `json` output is NDJSON, one `VerifyResponse` + `path`
+    per line.
+  - **Known gap:** git's `-M` rename detection is unreliable for small single-statement files
+    even at a 1% similarity threshold (verified empirically) — a renamed-and-edited query
+    routinely surfaces as an unrelated delete + add, and that pair is silently unverifiable
+    from git's diff alone. Rather than guess at pairing (risking a false comparison between
+    unrelated queries), `diff` prints one explicit `WARNING` whenever an add and a delete
+    co-occur, naming both files, so the gap is never silent — see `_undetected_rename_warning`.
+- `pyproject.toml` — `pipx install ./cli` → `sqlverify`. httpx is the only dependency; the
+  CLI must **never** import `core/`, or installing it would drag in Z3.
+
 ### db/
 - `client.py` — Supabase client using the service key (bypasses RLS; repos scope by `user_id` in code)
 - `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()` (`save_run`/`get_recent_runs` accept `project_id`)
@@ -202,7 +252,20 @@ File exists but is empty. Intended to check whether a single query satisfies sch
 ### 2. `core/witness.py` — Witness/counterexample generation helpers
 File exists but is empty. Intended to clean up and format Z3 model output into human-readable counterexample databases. Currently handled inline in `equivalence.py`.
 
-### 3. Scaling (memory: scaling-architecture-roadmap)
+### 3. The GitHub Action (memory: gtm-monetization-sequencing)
+`cli/` now ships both `verify` (an explicit pair) and `diff` (every query a
+branch changed, derived from git — see the `cli/` DONE section above). The
+`parse_ddl()` blocker that used to make `diff` unsound against a real Flyway
+`migrations/` directory (silently dropping every ALTER TABLE) is fixed —
+`core/ddl_parser.py` now folds ALTER TABLE and fails closed on anything
+outside the supported subset. What's left is the Action itself: a Docker
+action wrapping the CLI (`sqlverify diff --output github --fail-on …`), not a
+reimplementation. Design questions still open: how a PR's changed-file list
+maps to `GLOB` (a repo-configurable input, most likely), and whether the
+LLM `explain_result()` call should default off for this surface per the
+GTM roadmap note on trimming per-call cost for agent/CI traffic.
+
+### 4. Scaling (memory: scaling-architecture-roadmap)
 Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache,
 shared-state rate-limiter/breaker, poison-job watchdog. Not started — see the
 scaling roadmap memory.
@@ -228,6 +291,17 @@ All suites are standalone (no pytest required, but pytest-compatible):
   "divergent" witness replayed). `--seeds N --bound B`.
 - `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeout
   defaults/clamp, persistence, divergent explain) with Supabase/LLM stubbed.
+- `tests/cli_verify_test.py` — 24 tests for `sqlverify verify` with the transport
+  stubbed: the exit-code policy (0/1/2, `--fail-on`), client-side flag validation,
+  file/stdin reading, request payload + User-Agent, and the three renderers.
+- `tests/cli_diff_test.py` — 17 tests for `sqlverify diff` against real throwaway
+  git repos (only the HTTP transport is stubbed): pair discovery for
+  modified/added/deleted files, the undetected-rename warning, the DDL-changed
+  guard, Flyway version ordering, and worst-of exit-code aggregation.
+- `tests/ddl_parser_alter_test.py` — 32 tests for ALTER TABLE folding and
+  fail-closed rejection in `core/ddl_parser.py` (every supported action, plus
+  CREATE VIEW / ALTER COLUMN TYPE / DROP CONSTRAINT / DML / ALTER-before-CREATE
+  all raising `ValueError`).
 - `tests/api_keys_test.py` — key hashing + the dual auth path (session JWT vs
   `sqv_` API key) + magic-link OTP call.
 - `tests/circuit_breaker_test.py` — the explainer circuit breaker (trips, short-
@@ -236,8 +310,6 @@ All suites are standalone (no pytest required, but pytest-compatible):
   webhook `payment_failed`.
 - `docs/encoding_audit.md` — rule-by-rule audit of the Z3 encoding vs the paper
   (Figs 8–12, Eqns 1–2).
-
-Still missing: `core/ddl_parser.py` edge cases.
 
 ---
 
@@ -251,6 +323,9 @@ Still missing: `core/ddl_parser.py` edge cases.
 | Witness cross-check in `equivalence.py` | After Z3 finds a divergence, both queries run on the SQLite witness; if their outputs agree, the verdict is downgraded to `error` (encoder bug) instead of showing a fake counterexample. |
 | HTMX for frontend interactivity | No React build step, no npm. Jinja2 + HTMX keeps the stack simple and server-rendered. |
 | Multi-LLM provider abstraction | Factory pattern in `explainer/providers.py`. Adding a new provider = one new class + one line in `get_provider()`. Never add provider-specific logic outside `providers.py`. |
+| CLI/MCP clients depend on httpx only | `cli/` and `mcp/` are thin clients over `POST /api/verify/text`; the solver lives on the server. Neither may import `core/` — `pipx install ./cli` must not pull in Z3. Adding a dep here is a real cost to every install. |
+| CLI exit codes: 1 = verdict, 2 = CLI's fault | A network blip, lapsed key, or 402 must never be mistakable for a broken query — that's how a CI gate teaches people to ignore it. Verdict-vs-infrastructure is the split that matters, so transport/auth/quota all exit 2. |
+| CLI `--fail-on` defaults to `divergent` only | `unknown`/`error` warn but pass. Fail-closed is right for the *verifier* (a wrong verdict is fatal) and wrong for the *gate* (a check that reddens on the first CTE gets uninstalled). `unknown` always prints "not a proof", so a timeout can't read as a pass. Strict callers opt in via `--fail-on divergent,unknown,error`. |
 | Explainer is on-demand only | The "Explain" button is explicit user action. Never auto-call LLM on every verification — cost and latency. |
 | Supabase for DB + auth | Managed PostgreSQL + built-in auth. No self-hosted infra. Service key stays server-side only, never exposed to frontend. |
 | Render for deployment | Always-on container. NOT Lambda/serverless — Z3 binary is too large for cold starts. |

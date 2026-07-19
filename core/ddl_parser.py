@@ -1,20 +1,26 @@
 """
 core/ddl_parser.py
 
-Parses a Flyway-style DDL file (CREATE TABLE statements) into a SchemaModel.
+Parses a Flyway-style DDL file into a SchemaModel: one or more CREATE TABLE
+statements, plus any ALTER TABLE statements folded in statement order (as a
+real Flyway migration history would apply them).
 
 Handles:
   - Inline and out-of-line PRIMARY KEY
   - Inline and out-of-line FOREIGN KEY
   - NOT NULL constraints
-  - CHECK constraints (inline)
+  - CHECK constraints (inline; parsed but not encoded into Z3)
   - DEFAULT values
   - Multiple SQL dialects via sqlglot (postgres, mysql, sqlite, etc.)
+  - CREATE INDEX (skipped — never changes query results)
+  - ALTER TABLE: ADD COLUMN, ALTER COLUMN SET/DROP NOT NULL, ADD CONSTRAINT
+    (FOREIGN KEY / PRIMARY KEY / CHECK / UNIQUE), DROP COLUMN, RENAME TO,
+    RENAME COLUMN
 
-Does NOT handle:
-  - ALTER TABLE (Flyway V2__ migration files that alter existing tables)
-  - CREATE INDEX
-  - Anything other than CREATE TABLE
+Fails closed on anything else (CREATE VIEW, ALTER COLUMN TYPE, DROP
+CONSTRAINT, DML, ...) rather than silently ignoring it: a dropped
+schema-defining statement leaves the encoded schema weaker than reality,
+which is exactly how a verifier ends up proving a false "equivalent".
 
 Usage:
     schema = parse_ddl(ddl_text, dialect="postgres")
@@ -241,6 +247,161 @@ def _parse_create_table(stmt: exp.Create) -> Table:
     )
 
 
+# ── ALTER TABLE folding ──────────────────────────────────────────────────────
+# Folds a single ALTER TABLE statement into an already-built SchemaModel, in
+# the order it appears — later ALTERs see the effect of earlier ones, matching
+# how Flyway applies a linear migration history. Anything not handled below
+# raises ValueError (fail-closed) rather than being silently dropped.
+
+def _fold_alter_table(schema: SchemaModel, stmt: exp.Alter) -> None:
+    table_name = stmt.this.name
+    table = schema.get_table(table_name)
+    if table is None:
+        raise ValueError(
+            f"ALTER TABLE '{table_name}' references a table that doesn't exist yet "
+            "(or was renamed away) at this point in the DDL. CREATE TABLE and "
+            "ALTER TABLE statements must appear in migration order."
+        )
+
+    for action in stmt.args.get("actions") or []:
+        if isinstance(action, exp.ColumnDef):
+            _fold_add_column(table, action)
+        elif isinstance(action, exp.AlterColumn):
+            _fold_alter_column(table, action)
+        elif isinstance(action, exp.AddConstraint):
+            _fold_add_constraint(table, action)
+        elif isinstance(action, exp.Drop):
+            _fold_drop_action(table, action)
+        elif isinstance(action, exp.RenameColumn):
+            _fold_rename_column(table, action)
+        elif isinstance(action, exp.AlterRename):
+            _fold_rename_table(schema, table, action)
+        else:
+            raise ValueError(
+                f"ALTER TABLE '{table.name}': unsupported action "
+                f"{type(action).__name__!r}. Supported: ADD COLUMN, ALTER COLUMN "
+                "SET/DROP NOT NULL, ADD CONSTRAINT (FOREIGN KEY / PRIMARY KEY / "
+                "CHECK / UNIQUE), DROP COLUMN, RENAME TO, RENAME COLUMN."
+            )
+
+
+def _fold_add_column(table: Table, action: exp.ColumnDef) -> None:
+    col = _parse_column(action)
+    if table.get_column(col.name) is not None:
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' ADD COLUMN '{col.name}': column already exists."
+        )
+    table.columns.append(col)
+
+
+def _fold_alter_column(table: Table, action: exp.AlterColumn) -> None:
+    name = action.this.name
+    col = table.get_column(name)
+    if col is None:
+        raise ValueError(f"ALTER TABLE '{table.name}' ALTER COLUMN '{name}': no such column.")
+
+    if action.args.get("dtype") is not None:
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' ALTER COLUMN '{name}' TYPE ...: changing a "
+            "column's type is not supported."
+        )
+    if action.args.get("collate") or action.args.get("using"):
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' ALTER COLUMN '{name}': COLLATE/USING clauses "
+            "are not supported."
+        )
+
+    allow_null = action.args.get("allow_null")
+    if allow_null is None:
+        raise ValueError(f"ALTER TABLE '{table.name}' ALTER COLUMN '{name}': unsupported form.")
+    if col.primary_key and allow_null:
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' ALTER COLUMN '{name}' DROP NOT NULL: "
+            f"'{name}' is a primary key column and cannot be made nullable."
+        )
+    col.nullable = allow_null
+
+
+def _fold_add_constraint(table: Table, action: exp.AddConstraint) -> None:
+    # Reused verbatim: these helpers only look for FK/PK nodes anywhere under
+    # the given node via find_all, so they work on an AddConstraint action
+    # exactly as they do on a whole CREATE TABLE statement.
+    new_fks = _extract_foreign_keys(action)
+    new_pks = _extract_primary_key_columns(action)
+
+    if not new_fks and not new_pks:
+        # CHECK / UNIQUE — parsed but not encoded into Z3, same as an inline
+        # constraint on CREATE TABLE (see CLAUDE.md "Known limitations").
+        if action.find(exp.CheckColumnConstraint) or action.find(exp.UniqueColumnConstraint):
+            return
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' ADD CONSTRAINT: unsupported constraint form. "
+            "Supported: FOREIGN KEY, PRIMARY KEY, CHECK, UNIQUE."
+        )
+
+    table.foreign_keys.extend(new_fks)
+    for pk_name in new_pks:
+        col = table.get_column(pk_name)
+        if col is None:
+            raise ValueError(
+                f"ALTER TABLE '{table.name}' ADD CONSTRAINT PRIMARY KEY: "
+                f"no such column '{pk_name}'."
+            )
+        col.primary_key = True
+        col.nullable = False
+        if pk_name not in table.primary_key_columns:
+            table.primary_key_columns.append(pk_name)
+
+
+def _fold_drop_action(table: Table, action: exp.Drop) -> None:
+    kind = action.args.get("kind")
+    if kind == "COLUMN":
+        name = action.this.name
+        if table.get_column(name) is None:
+            raise ValueError(f"ALTER TABLE '{table.name}' DROP COLUMN '{name}': no such column.")
+        table.columns = [c for c in table.columns if c.name != name]
+        if name in table.primary_key_columns:
+            table.primary_key_columns.remove(name)
+        table.foreign_keys = [fk for fk in table.foreign_keys if name not in fk.columns]
+        return
+    if kind == "CONSTRAINT":
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' DROP CONSTRAINT: not supported — SQLVerify "
+            "doesn't track constraint names, so it can't identify which constraint "
+            "to remove."
+        )
+    raise ValueError(f"ALTER TABLE '{table.name}' DROP {kind}: not supported.")
+
+
+def _fold_rename_column(table: Table, action: exp.RenameColumn) -> None:
+    old_name = action.this.name
+    new_name = action.args["to"].name
+    col = table.get_column(old_name)
+    if col is None:
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' RENAME COLUMN '{old_name}': no such column."
+        )
+    col.name = new_name
+    if old_name in table.primary_key_columns:
+        table.primary_key_columns = [
+            new_name if c == old_name else c for c in table.primary_key_columns
+        ]
+    for fk in table.foreign_keys:
+        fk.columns = [new_name if c == old_name else c for c in fk.columns]
+
+
+def _fold_rename_table(schema: SchemaModel, table: Table, action: exp.AlterRename) -> None:
+    new_name = action.this.name
+    if new_name in schema.tables and schema.tables[new_name] is not table:
+        raise ValueError(
+            f"ALTER TABLE '{table.name}' RENAME TO '{new_name}': a table named "
+            f"'{new_name}' already exists."
+        )
+    del schema.tables[table.name]
+    table.name = new_name
+    schema.tables[new_name] = table
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def parse_ddl(ddl_sql: str, dialect: str = "generic") -> SchemaModel:
@@ -257,7 +418,9 @@ def parse_ddl(ddl_sql: str, dialect: str = "generic") -> SchemaModel:
         SchemaModel with all tables, columns, and constraints populated.
 
     Raises:
-        ValueError: If ddl_sql is empty or contains no CREATE TABLE statements.
+        ValueError: If ddl_sql is empty, contains no CREATE TABLE statements,
+            or contains a statement outside the supported subset (fail-closed
+            — see the module docstring for exactly what's handled).
     """
     if not ddl_sql or not ddl_sql.strip():
         raise ValueError("DDL input is empty.")
@@ -268,14 +431,31 @@ def parse_ddl(ddl_sql: str, dialect: str = "generic") -> SchemaModel:
     schema = SchemaModel(dialect=dialect)
 
     for stmt in statements:
-        if not isinstance(stmt, exp.Create):
-            continue
-        # Only handle CREATE TABLE, not CREATE INDEX / CREATE VIEW
-        if not isinstance(stmt.this, exp.Schema):
-            continue
-
-        table = _parse_create_table(stmt)
-        schema.tables[table.name] = table
+        if isinstance(stmt, exp.Create):
+            kind = stmt.args.get("kind")
+            if kind == "INDEX":
+                continue  # semantics-neutral — never changes query results
+            if kind == "TABLE" and isinstance(stmt.this, exp.Schema):
+                table = _parse_create_table(stmt)
+                schema.tables[table.name] = table
+                continue
+            raise ValueError(
+                f"Unsupported DDL statement: CREATE {kind or type(stmt.this).__name__}. "
+                "Only CREATE TABLE and CREATE INDEX are supported."
+            )
+        elif isinstance(stmt, exp.Alter):
+            if stmt.args.get("kind") != "TABLE":
+                raise ValueError(
+                    f"Unsupported DDL statement: ALTER {stmt.args.get('kind')}. "
+                    "Only ALTER TABLE is supported."
+                )
+            _fold_alter_table(schema, stmt)
+        elif stmt is not None:
+            raise ValueError(
+                f"Unsupported DDL statement: {type(stmt).__name__}. Only CREATE TABLE, "
+                "CREATE INDEX, and ALTER TABLE are supported — SQLVerify never silently "
+                "drops a schema-defining statement."
+            )
 
     if not schema.tables:
         raise ValueError(
