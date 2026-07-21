@@ -351,16 +351,45 @@
   // so it is handled here with event delegation on the document instead. The
   // toggle buttons carry data-view; this listener catches clicks on them even
   // after the partial is swapped into #result-panel.
+  // Client-side JSON syntax highlighting for the Raw JSON view. Escapes HTML
+  // first — divergence_reason/error_message can contain arbitrary text from
+  // the queries being verified, so this must never trust it as markup.
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function highlightJson(raw) {
+    const escaped = escapeHtml(raw);
+    return escaped.replace(
+      /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      (match) => {
+        let cls = "json-number";
+        if (/^"/.test(match)) {
+          cls = /:\s*$/.test(match) ? "json-key" : "json-string";
+        } else if (match === "true" || match === "false") {
+          cls = "json-boolean";
+        } else if (match === "null") {
+          cls = "json-null";
+        }
+        return `<span class="${cls}">${match}</span>`;
+      }
+    );
+  }
+
   document.addEventListener("click", (e) => {
     // Handle JSON copy button
     const copyBtn = e.target.closest(".copy-json-btn");
     if (copyBtn) {
-      const pre = copyBtn.nextElementSibling;
-      if (pre && pre.classList.contains("raw-json")) {
+      const pre = copyBtn.closest("#view-json").querySelector(".raw-json");
+      if (pre) {
         navigator.clipboard.writeText(pre.innerText);
         const orig = copyBtn.innerHTML;
+        copyBtn.classList.add("copied");
         copyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
-        setTimeout(() => copyBtn.innerHTML = orig, 2000);
+        setTimeout(() => {
+          copyBtn.innerHTML = orig;
+          copyBtn.classList.remove("copied");
+        }, 2000);
       }
       return;
     }
@@ -376,6 +405,14 @@
       .querySelectorAll(".toggle-btn")
       .forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
+
+    if (view === "json") {
+      const pre = document.getElementById("raw-json-content");
+      if (pre && !pre.dataset.highlighted) {
+        pre.innerHTML = highlightJson(pre.textContent);
+        pre.dataset.highlighted = "1";
+      }
+    }
   });
 
   document.getElementById("toggle-sidebar-btn").addEventListener("click", () => {

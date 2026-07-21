@@ -883,6 +883,9 @@ h1, h2, h3, h4 {
 }
 
 .toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
   padding: 0.3rem 0.75rem;
   font-size: 0.8125rem;
   font-weight: 500;
@@ -894,14 +897,28 @@ h1, h2, h3, h4 {
   transition: all 0.15s;
 }
 
+.toggle-btn svg {
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
 .toggle-btn:hover {
   color: var(--text-primary);
+}
+
+.toggle-btn:hover svg {
+  opacity: 1;
 }
 
 .toggle-btn.active {
   background-color: var(--panel-bg);
   color: var(--text-primary);
   box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+.toggle-btn.active svg {
+  opacity: 1;
+  color: var(--accent-color);
 }
 
 /* ── Result section headings ─────────────────────────── */
@@ -979,6 +996,53 @@ h1, h2, h3, h4 {
 .diff-label.v2 { background: rgba(239,68,68,0.15);  color: #f87171; }
 
 /* ── Raw JSON view ───────────────────────────────────── */
+.json-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.json-view-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.json-view-label svg {
+  color: var(--accent-color);
+}
+
+.copy-json-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border: 1px solid var(--panel-border);
+  border-radius: 5px;
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.copy-json-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
+.copy-json-btn.copied {
+  color: var(--status-green);
+  border-color: var(--status-green);
+}
+
 .raw-json {
   background-color: var(--bg-color);
   border: 1px solid var(--panel-border);
@@ -991,6 +1055,15 @@ h1, h2, h3, h4 {
   white-space: pre;
   color: var(--text-primary);
 }
+
+/* JSON syntax highlighting — reuses the same theme tokens as the rest of the
+   UI (status colors, accent) so the raw view reads as part of the same
+   system rather than a bolted-on code dump. */
+.raw-json .json-key { color: var(--accent-color); }
+.raw-json .json-string { color: var(--status-green); }
+.raw-json .json-number { color: var(--status-yellow); }
+.raw-json .json-boolean { color: var(--status-red); }
+.raw-json .json-null { color: var(--text-secondary); font-style: italic; }
 
 /* ── db-table-header with icon ───────────────────────── */
 .db-table-header {
