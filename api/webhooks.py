@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import os
+import httpx
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -69,6 +70,70 @@ def _verify_signature(body: bytes, signature: str) -> bool:
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
 
+# ---------------------------------------------------------------------------
+# Discord notifications
+# ---------------------------------------------------------------------------
+
+# Tier → price label
+_TIER_PRICE = {"individual": "$9/mo", "team": "$49/mo"}
+
+# Event → (color, emoji)
+_EVENT_STYLE: dict[str, tuple[int, str]] = {
+    "subscription_created":        (3066993,  "🎉"),  # green
+    "subscription_resumed":        (3066993,  "💚"),  # green
+    "subscription_updated":        (3447003,  "🔄"),  # blue
+    "subscription_cancelled":      (15158332, "😢"),  # red
+    "subscription_expired":        (15158332, "💀"),  # red
+    "subscription_payment_failed": (15105570, "⚠️"),  # orange
+}
+
+async def _notify_discord(
+    event_name: str,
+    tier: str,
+    status: str,
+    customer_email: str,
+    user_id: str | None,
+) -> None:
+    """
+    Post a Discord embed to the appropriate channel based on event type.
+    - subscription_created → #👤-signups
+    - everything else      → #💰-revenue
+    Silently swallows errors — Discord is non-critical; webhook must still return 200.
+    """
+    if event_name == "subscription_created":
+        webhook_url = os.getenv("DISCORD_WEBHOOK_SIGNUPS", "")
+    else:
+        webhook_url = os.getenv("DISCORD_WEBHOOK_REVENUE", "")
+
+    if not webhook_url:
+        return  # env var not set, skip silently
+
+    color, emoji = _EVENT_STYLE.get(event_name, (3447003, "📢"))
+    price = _TIER_PRICE.get(tier, "unknown")
+
+        # Mask email: dat@sqlverify.com → d***@sqlverify.com
+    masked_email = customer_email
+    if "@" in customer_email:
+        local, domain = customer_email.split("@", 1)
+        masked_email = f"{local[0]}***@{domain}"
+
+    embed = {
+        "title": f"{emoji} {event_name.replace('_', ' ').title()}",
+        "color": color,
+        "fields": [
+            {"name": "📦 Tier",   "value": f"{tier.capitalize()} ({price})", "inline": True},
+            {"name": "📊 Status", "value": status.capitalize(),              "inline": True},
+            {"name": "📧 Email",  "value": masked_email,                     "inline": True},
+            {"name": "🔑 UserID", "value": user_id or "unknown",             "inline": False},
+        ],
+        "footer": {"text": "SQLVerify · Lemon Squeezy"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(webhook_url, json={"embeds": [embed]})
+    except Exception as e:
+        print(f"[webhooks] Discord notify failed (non-critical): {e}")
 
 # ---------------------------------------------------------------------------
 # Webhook endpoint
@@ -163,6 +228,15 @@ async def lemonsqueezy_webhook(
         event_type=event_name,
         tier=tier,
         status=status,
+    )
+    
+    # Discord notification — fire and forget, non-critical
+    await _notify_discord(
+        event_name=event_name,
+        tier=tier,
+        status=status,
+        customer_email=customer_email,
+        user_id=user_id,
     )
     print(f"[webhooks] {event_name} → {customer_email} ({tier}, {status}, user={user_id})")
     return JSONResponse({"received": True, "handled": True, "event": event_name})

@@ -26,8 +26,14 @@
 
         <!-- Plain English / Raw JSON toggle -->
         <div class="view-toggle" style="margin-bottom: 1.25rem;">
-            <button class="toggle-btn active" data-view="plain">Plain English</button>
-            <button class="toggle-btn"        data-view="json">Raw JSON</button>
+            <button class="toggle-btn active" data-view="plain">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h10M4 18h13"></path></svg>
+                Plain English
+            </button>
+            <button class="toggle-btn" data-view="json">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path></svg>
+                Raw JSON
+            </button>
         </div>
 
         <!-- Plain English view -->
@@ -170,17 +176,24 @@
         </div>
 
         <!-- Raw JSON view -->
-        <div id="view-json" style="display:none; position: relative;">
-            <button class="btn btn-secondary copy-json-btn" style="position: absolute; top: 0.5rem; right: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 0.25rem;" title="Copy JSON">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              Copy
-            </button>
+        <div id="view-json" style="display:none;">
+            <div class="json-view-header">
+                <span class="json-view-label">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path></svg>
+                    VerifyResponse
+                </span>
+                <button class="copy-json-btn" title="Copy JSON">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  Copy
+                </button>
+            </div>
             <!-- Mirrors the VerifyResponse returned by POST /api/verify/text so the
-                 copied payload is a faithful reference for the CI/JSON endpoint. -->
-            <pre class="raw-json" style="padding-top: 2.5rem;">{{ {
+                 copied payload is a faithful reference for the CI/JSON endpoint.
+                 Syntax-highlighted client-side (see verify.html) on first view. -->
+            <pre class="raw-json" id="raw-json-content">{{ {
                 "status": result.status,
                 "divergence_reason": result.divergence_reason,
                 "counterexample_db": result.counterexample_db,
