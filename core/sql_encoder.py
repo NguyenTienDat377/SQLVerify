@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import sqlglot
@@ -149,6 +149,10 @@ class ParsedQuery:
     # WHERE/HAVING may now be arbitrary AND/OR/NOT combinations.
     where_conditions: Optional[object]
     having_conditions: Optional[object]
+    # Non-recursive CTEs as (name, parsed body), in declaration order. Encoded to
+    # relations and materialised into the SymbolicDB by encode_query (VeriEQL's
+    # With(Q̃,R⃗,Q)); empty for a query with no WITH clause.
+    ctes: list = field(default_factory=list)
 
 
 # ── Symbolic database ────────────────────────────────────────────────────────
@@ -183,7 +187,37 @@ class SymbolicDB:
         # largest |numeric literal| seen while encoding — the finite value
         # domain must cover it (see note_numeric_literal / domain_constraints)
         self._max_numeric_literal: float = 0.0
+        # Materialised CTE relations (VeriEQL's With): column types per pseudo-
+        # table, keyed by the mangled registration name. These live in `vars` /
+        # `nulls` / `exists` like base tables so every accessor works unchanged,
+        # but are NOT in `schema.tables`, so domain_constraints() never adds
+        # integrity constraints for them (a derived relation has none).
+        self.cte_col_types: dict[str, dict[str, str]] = {}
+        self._cte_seq: int = 0
         self._build()
+
+    def register_cte_relation(self, name: str, qf: "QueryFormula") -> str:
+        """Bind a materialised CTE (a QueryFormula) as a pseudo-table the main
+        query can read like a base table, and return its unique registration
+        name. Each of the CTE's output tuples becomes one row: the tuple's
+        `present` flag is the row's existence, and its (is_null, value) cells are
+        expressions over the shared base-table vars — so joining a CTE relation
+        reads its cells as values, exactly the paper's D′ = D[Rᵢ ↦ [[Qᵢ]]_D].
+
+        The name is mangled and per-registration unique so a CTE never clobbers a
+        base table (or a CTE of the other query being compared over the same db).
+        """
+        self._cte_seq += 1
+        reg = f"__cte_{self._cte_seq}__{name}"
+        n = len(qf.output)
+        self.vars[reg] = {}
+        self.nulls[reg] = {}
+        for j, alias in enumerate(qf.col_aliases):
+            self.vars[reg][alias] = [qf.output[i].cols[j].value for i in range(n)]
+            self.nulls[reg][alias] = [qf.output[i].cols[j].is_null for i in range(n)]
+        self.exists[reg] = [qf.output[i].present for i in range(n)]
+        self.cte_col_types[reg] = dict(qf.col_types)
+        return reg
 
     def _build(self) -> None:
         for table_name, table in self.schema.tables.items():
@@ -408,6 +442,9 @@ class QueryFormula:
     col_aliases: list[str]
     extra_constraints: list
     bound: int
+    # Output column types by alias — populated so a materialised CTE relation
+    # can answer col_type queries for the query that reads from it.
+    col_types: dict[str, str] = field(default_factory=dict)
 
 
 # ── SQL parser ───────────────────────────────────────────────────────────────
@@ -679,6 +716,14 @@ def _parse_select_expr(node: exp.Expression) -> ParsedSelectExpr:
     )
 
 
+# ── SQL → ParsedQuery ────────────────────────────────────────────────────────
+
+def _sub_arg(node: exp.Expression, name: str):
+    """Fetch a sqlglot arg tolerant of the 30.x reserved-word rename
+    ('from' → 'from_', 'with' → 'with_')."""
+    return node.args.get(name) or node.args.get(name + "_")
+
+
 def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
     """
     Parse a SELECT SQL string into a structured ParsedQuery.
@@ -702,13 +747,50 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
     if not isinstance(stmt, exp.Select):
         raise ValueError("Only SELECT queries are supported.")
 
+    return _parse_select_ast(stmt)
+
+
+def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
+    """Parse a SELECT AST (possibly with a WITH clause) into a ParsedQuery.
+
+    Non-recursive CTEs are captured as `ctes` — encode_query materialises each
+    one into the SymbolicDB (VeriEQL's With(Q̃,R⃗,Q)) and lets the main query read
+    it like a base table. The body is parsed with the WITH stripped, so the rest
+    of the subset checks (no subqueries, etc.) apply to the main query alone.
+    """
+    # ── Non-recursive CTEs → parsed bodies ───────────────────────────────────
+    ctes: list = []
+    with_node = _sub_arg(stmt, "with")
+    if with_node is not None:
+        if with_node.args.get("recursive"):
+            raise ValueError("Recursive CTEs (WITH RECURSIVE) are not supported.")
+        for cte in with_node.expressions:
+            name = cte.alias
+            if not name:
+                raise ValueError("Unnamed CTE is not supported.")
+            body = cte.this
+            if not isinstance(body, exp.Select):
+                raise ValueError(f"CTE '{name}' body must be a SELECT.")
+            if _sub_arg(body, "with"):
+                raise ValueError(
+                    f"A WITH clause nested inside CTE '{name}' is not supported.")
+            ctes.append((name, _parse_select_ast(body)))
+        # A CTE body referencing another CTE (CTE-on-CTE) is not supported yet.
+        cte_names = {nm for nm, _ in ctes}
+        for nm, body_pq in ctes:
+            refs = {body_pq.from_table} | {j.table_name for j in body_pq.joins}
+            if refs & cte_names:
+                raise ValueError(
+                    "A CTE whose body references another CTE is not supported yet.")
+        stmt = stmt.copy()
+        stmt.args.pop("with", None)
+        stmt.args.pop("with_", None)
+
     def arg(name: str):
         # sqlglot 30.x renamed reserved-word arg keys ('from' → 'from_', etc.)
         return stmt.args.get(name) or stmt.args.get(name + "_")
 
     # ── Whole-query constructs outside the V1 subset ─────────────────────────
-    if arg("with"):
-        raise ValueError("CTEs (WITH ...) are not supported in V1.")
     if arg("distinct"):
         raise ValueError("SELECT DISTINCT is not supported in V1.")
     if arg("limit"):
@@ -832,6 +914,7 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
         group_by=group_by,
         where_conditions=where_conditions,
         having_conditions=having_conditions,
+        ctes=ctes,
     )
 
 
@@ -935,10 +1018,39 @@ def encode_query(
     """
     bound = db.bound
 
-    # ── Alias → real table name resolution & fail-closed validation ──────────
-    alias_map: dict[str, str] = {parsed.from_alias: parsed.from_table}
+    def col_type_of(tname: str, col: str) -> str:
+        """Column type for a base table (via schema) or a materialised CTE
+        relation (via db.cte_col_types). Defaults to INTEGER when unknown."""
+        tobj = schema.get_table(tname)
+        if tobj is not None:
+            c = tobj.get_column(col)
+            if c is not None:
+                return c.col_type
+        return db.cte_col_types.get(tname, {}).get(col, "INTEGER")
+
+    # ── Materialise CTEs (VeriEQL With(Q̃,R⃗,Q), Fig. 5) ───────────────────────
+    # Encode each CTE body to a QueryFormula and bind it into the SymbolicDB as a
+    # pseudo-table (D′ = D[Rᵢ ↦ [[Qᵢ]]_D]). The main query then reads a CTE
+    # relation exactly like a base table. Encoding order = declaration order.
+    cte_regs: dict[str, str] = {}
+    cte_constraints: list = []
+    for cte_name, cte_parsed in parsed.ctes:
+        cte_qf = encode_query(cte_parsed, db, schema)
+        if len(set(cte_qf.col_aliases)) != len(cte_qf.col_aliases):
+            raise ValueError(
+                f"CTE '{cte_name}' has duplicate output column names; alias "
+                "them uniquely so the reading query can reference each.")
+        cte_constraints.extend(cte_qf.extra_constraints)
+        cte_regs[cte_name] = db.register_cte_relation(cte_name, cte_qf)
+
+    def map_name(tname: str) -> str:
+        # A FROM/JOIN name that is a CTE resolves to its registration name.
+        return cte_regs.get(tname, tname)
+
+    # ── Alias → table/relation name resolution & fail-closed validation ──────
+    alias_map: dict[str, str] = {parsed.from_alias: map_name(parsed.from_table)}
     for join in parsed.joins:
-        alias_map[join.alias] = join.table_name
+        alias_map[join.alias] = map_name(join.table_name)
 
     for tname in alias_map.values():
         if tname not in db.vars:
@@ -950,10 +1062,11 @@ def encode_query(
         return alias_map[alias]
 
     from_alias = parsed.from_alias
-    from_tname = parsed.from_table
+    from_tname = map_name(parsed.from_table)
 
-    # Self-join guard: SymbolicDB rows are keyed by real table name, so two
-    # aliases of the same table would unsoundly share the same symbolic rows.
+    # Self-join guard: two aliases of the same table would unsoundly share the
+    # same symbolic rows. (CTE relations get distinct registration names, so a
+    # CTE over table T joined with T is fine — they are independent relations.)
     if len(set(alias_map.values())) != len(alias_map):
         raise ValueError("Self-joins are not supported.")
 
@@ -970,6 +1083,14 @@ def encode_query(
             "Outer joins are supported only as a single join; multi-table "
             "joins must be INNER in this version."
         )
+
+    # Scope: a materialised CTE relation may be used only on the inner path
+    # (FROM / INNER joins). On an outer-join side its cells would need
+    # null-extension handling that this path doesn't provide — fail-closed.
+    if outer_joins and any(v in db.cte_col_types for v in alias_map.values()):
+        raise ValueError(
+            "A CTE relation combined with an outer (LEFT/RIGHT) join is not "
+            "supported yet — use a CTE in FROM or INNER-join positions.")
 
     # Two-table outer-join context (only meaningful on the single-outer path).
     has_join = bool(parsed.joins)
@@ -1010,12 +1131,15 @@ def encode_query(
     # ── WHERE: evaluated on the post-join tuple (three-valued: TRUE keeps) ───
     # Paper Fig. 5: σ_φ(Q) = filter(Q, λx.[[φ]]_x = ⊤) — a row survives iff the
     # predicate's `is_true` half holds (NULL and FALSE both drop it).
+    def type_of(alias: str, col: str) -> str:
+        return col_type_of(resolve(alias), col)
+
     def where_all(cellfn) -> BoolRef:
         if parsed.where_conditions is None:
             return BoolVal(True)
         t, _ = _eval_tf(
             parsed.where_conditions,
-            lambda cond: _pred_tf(cond, alias_map, db, schema, cellfn),
+            lambda cond: _pred_tf(cond, db, type_of, cellfn),
         )
         return t
 
@@ -1030,8 +1154,11 @@ def encode_query(
         the n participating tables.
         """
         aliases = [from_alias] + [j.alias for j in parsed.joins]
+        # Per-source row counts: a base table has `bound` rows; a materialised
+        # CTE relation has one row per output tuple (may be ≠ bound).
+        ranges = [range(len(db.exists[resolve(a)])) for a in aliases]
         bag: list[tuple[BoolRef, object]] = []
-        for combo in itertools.product(range(bound), repeat=len(aliases)):
+        for combo in itertools.product(*ranges):
             idx = dict(zip(aliases, combo))
 
             def cellfn(a, c, _idx=idx):
@@ -1103,11 +1230,8 @@ def encode_query(
 
     # ── Aggregate over a list of contributions (active_bool, cell_fn) ────────
     def agg_value(sel: ParsedSelectExpr, contribs: list) -> SymValue:
-        is_real = False
-        if sel.col_name is not None:
-            t = resolve(sel.table_alias)
-            col_obj = schema.get_table(t).get_column(sel.col_name) if schema.get_table(t) else None
-            is_real = bool(col_obj and col_obj.col_type == "REAL")
+        is_real = (sel.col_name is not None
+                   and col_type_of(resolve(sel.table_alias), sel.col_name) == "REAL")
         zero = RealVal(0) if is_real else IntVal(0)
 
         def coalesce(sv: SymValue) -> SymValue:
@@ -1177,8 +1301,21 @@ def encode_query(
     has_agg = any(s.expr_type in ("sum", "count_star", "count_col")
                   for s in parsed.select_exprs)
     has_group = bool(parsed.group_by)
-    extra_constraints: list = []
+    extra_constraints: list = list(cte_constraints)
     output: list[OutputTuple] = []
+
+    # Output column types (so this query, if used as a CTE, can answer col_type
+    # queries for whatever reads it): COUNT → INTEGER, SUM → its column's numeric
+    # type, a projected column → its source type.
+    result_col_types: dict[str, str] = {}
+    for sel in parsed.select_exprs:
+        if sel.expr_type == "column":
+            result_col_types[sel.alias] = col_type_of(resolve(sel.table_alias), sel.col_name)
+        elif sel.expr_type == "sum":
+            src = col_type_of(resolve(sel.table_alias), sel.col_name) if sel.col_name else "INTEGER"
+            result_col_types[sel.alias] = "REAL" if src == "REAL" else "INTEGER"
+        else:  # count_star / count_col
+            result_col_types[sel.alias] = "INTEGER"
 
     # ── INNER path (0..N joins): build the join bag, then project/aggregate ──
     if inner_only:
@@ -1256,6 +1393,7 @@ def encode_query(
             col_aliases=col_aliases,
             extra_constraints=extra_constraints,
             bound=bound,
+            col_types=result_col_types,
         )
 
     # ── Single LEFT/RIGHT outer-join path (unchanged) ────────────────────────
@@ -1419,6 +1557,7 @@ def encode_query(
         col_aliases=col_aliases,
         extra_constraints=extra_constraints,
         bound=bound,
+        col_types=result_col_types,
     )
 
 
@@ -1466,9 +1605,8 @@ def _eval_tf(node, leaf_tf) -> tuple[BoolRef, BoolRef]:
 
 def _pred_tf(
     cond: ParsedCondition,
-    alias_map: dict[str, str],
     db: SymbolicDB,
-    schema: SchemaModel,
+    type_of,
     cellfn,
 ) -> tuple[BoolRef, BoolRef]:
     """
@@ -1476,7 +1614,8 @@ def _pred_tf(
     (is_true, is_false). A comparison against a NULL operand is NULL (both
     halves false); IS [NOT] NULL are the only two-valued predicates. Cells are
     read through `cellfn(alias, col)` so the same predicate works in matched-
-    pair and null-extended row contexts.
+    pair and null-extended row contexts; `type_of(alias, col)` gives the column
+    type (base table or materialised CTE relation).
 
     Raises ValueError on anything that cannot be encoded — never drops a
     predicate silently.
@@ -1500,10 +1639,7 @@ def _pred_tf(
     if cond.value is None:
         raise ValueError(f"Unsupported predicate on column '{cond.col}'.")
 
-    tname = alias_map[cond.table_alias]
-    table_obj = schema.get_table(tname)
-    col_obj = table_obj.get_column(cond.col) if table_obj else None
-    col_type = col_obj.col_type if col_obj else "INTEGER"
+    col_type = type_of(cond.table_alias, cond.col)
 
     if isinstance(cond.value, str):
         if col_type not in ("TEXT", "TIMESTAMP"):

@@ -156,17 +156,23 @@ class SelectItem:
     coalesce_zero: bool = False              # wrap SUM in COALESCE(.., 0)
     alias: str = "o"
 
-    def render(self) -> str:
+    def expr_only(self) -> str:
+        """The select expression without any ` AS alias` (for CTE re-aliasing)."""
         if self.kind == "col":
             return f"{self.src[0]}.{self.src[1]}"
         if self.kind == "count_star":
-            return f"COUNT(*) AS {self.alias}"
+            return "COUNT(*)"
         if self.kind == "count_col":
-            return f"COUNT({self.src[0]}.{self.src[1]}) AS {self.alias}"
+            return f"COUNT({self.src[0]}.{self.src[1]})"
         inner = f"SUM({self.src[0]}.{self.src[1]})"
         if self.coalesce_zero:
             inner = f"COALESCE({inner}, 0)"
-        return f"{inner} AS {self.alias}"
+        return inner
+
+    def render(self) -> str:
+        if self.kind == "col":
+            return self.expr_only()
+        return f"{self.expr_only()} AS {self.alias}"
 
 
 @dataclass
@@ -397,6 +403,63 @@ def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[Gen
             return m, choice
 
 
+# ── CTE wrapping (exercises the non-recursive CTE inliner vs SQLite) ──────────
+
+def _pred_aliases(p: Pred) -> set:
+    """Table aliases a predicate (tree) touches."""
+    if p.kind == "cmp_col":
+        return {p.lhs[0], p.rhs[0]}
+    if p.kind in ("or", "not"):
+        out = set()
+        for c in p.children:
+            out |= _pred_aliases(c)
+        return out
+    return {p.lhs[0]} if p.lhs else set()
+
+
+def cte_wrap(q: GenQuery, tables: list[GenTable], rng: random.Random) -> str:
+    """Rewrite q into a SEMANTICS-PRESERVING CTE form that wraps the FROM table
+    (t1) in `WITH wcte AS (SELECT <t1 cols> FROM t1 [WHERE …]) … FROM wcte`.
+
+    Predicates that touch only t1 are pushed into the CTE — sound iff t1 is not
+    null-extended (no outer join), so filtering it early equals filtering late.
+    This exercises the inliner's projection-mapping and WHERE-conjoin paths while
+    keeping wcte-form ≡ q, so check_seed's pair invariants still hold. SQLite runs
+    the CTE natively; our engine flattens it — any flatten bug shows as a bag
+    mismatch on the sampled databases."""
+    t1 = tables[0]
+    proj = ", ".join(f"x.{c.name} AS {c.name}" for c in t1.columns)
+    body = f"SELECT {proj} FROM t1 x"
+
+    kept = list(q.where)
+    if q.join_type not in ("LEFT", "RIGHT"):
+        movable = [p for p in q.where if _pred_aliases(p) <= {"x"}]
+        if movable:
+            body += " WHERE " + " AND ".join(p.render() for p in movable)
+            moved = {id(p) for p in movable}
+            kept = [p for p in q.where if id(p) not in moved]
+
+    outer = copy.deepcopy(q)
+    outer.where = kept
+    inner = outer.render().replace(" FROM t1 x", " FROM wcte x", 1)
+    return f"WITH wcte AS ({body}) {inner}"
+
+
+def materialize_wrap(q: GenQuery) -> str:
+    """Wrap the ENTIRE query as a CTE and select it back: `WITH _m AS (q') SELECT
+    _m.c0,... FROM _m`, where q' is q with its projections aliased c0..cn. This is
+    `SELECT * FROM (q)` ≡ q under bag semantics, so it preserves meaning while
+    forcing the engine to MATERIALIZE q — including aggregating, multi-table, and
+    outer-join CTE bodies (the cases inlining could never handle). SQLite runs the
+    CTE natively; any materialization bug shows as a bag mismatch."""
+    body_sel = ", ".join(f"{s.expr_only()} AS c{i}" for i, s in enumerate(q.select))
+    full = q.render()
+    rest = full[full.index(" FROM "):]          # " FROM t1 x [joins] [where] …"
+    body = f"SELECT {body_sel}{rest}"
+    outer_cols = ", ".join(f"_m.c{i}" for i in range(len(q.select)))
+    return f"WITH _m AS ({body}) SELECT {outer_cols} FROM _m"
+
+
 # ── Concrete database sampling & SQLite execution ────────────────────────────
 
 def sample_db(rng: random.Random, tables: list[GenTable], max_rows: int) -> dict:
@@ -475,6 +538,20 @@ def check_seed(seed: int, bound: int, dbs_per_pair: int) -> tuple[str, bool]:
     base = gen_query(rng, tables)
     mutant, mutation = mutate(rng, base, tables)
     sql1, sql2 = base.render(), mutant.render()
+
+    # Semantics-preserving CTE rewrites of base (base-form ≡ base, so pair
+    # invariants hold), cross-checking CTE materialization against SQLite:
+    #   ~25% wrap base's FROM table in a CTE (single-table body, joined);
+    #   ~20% materialize the WHOLE query as a CTE (aggregating/multi-table/outer
+    #        bodies — the cases inlining never could).
+    r = rng.random()
+    if r < 0.25 and base.join_type not in ("LEFT", "RIGHT"):
+        # cte_wrap puts the CTE in FROM; combined with an outer join that's a
+        # (correct) scope fail-closed, so only wrap inner/no-join bases here.
+        sql1 = cte_wrap(base, tables, rng)
+    elif r < 0.45:
+        # materialize_wrap keeps any outer join INSIDE the CTE body (allowed).
+        sql1 = materialize_wrap(base)
 
     result = check_equivalence(ddl, sql1, sql2, dialect="sqlite",
                                bound=bound, timeout_ms=60_000)

@@ -390,6 +390,11 @@ def _materialize_witness(model, db: SymbolicDB) -> dict:
         return f"__sv_{value}"
 
     for table_name, col_vars in db.vars.items():
+        # Skip materialised CTE relations: they are derived from base tables, not
+        # inputs to the witness DB. SQLite recomputes each CTE from the base rows
+        # when the original query (which still contains its WITH clause) replays.
+        if table_name in db.cte_col_types:
+            continue
         rows = []
         for i in range(db.bound):
             exists_var = db.exists[table_name][i]

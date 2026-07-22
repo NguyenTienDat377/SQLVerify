@@ -194,6 +194,116 @@ def test_in_subquery_still_rejected():
     _check(q, q, "error", msg_contains="subquer")
 
 
+# ── Non-recursive CTE inlining (paper's With(Q̃,R⃗,Q); we flatten, not materialize) ─
+
+def test_cte_equals_flat_form():
+    # WITH-wrapping a filtered projection must prove equal to the flat query.
+    _check(
+        "WITH active AS (SELECT account_id AS aid FROM accounts WHERE balance > 100) "
+        "SELECT aid FROM active",
+        "SELECT account_id AS aid FROM accounts WHERE balance > 100",
+        "equivalent",
+    )
+
+
+def test_cte_joined_to_real_table_equals_flat_join():
+    _check(
+        "WITH a AS (SELECT account_id AS aid FROM accounts WHERE balance > 0) "
+        "SELECT a.aid, t.amount FROM a JOIN transactions t ON a.aid = t.account_id",
+        "SELECT ac.account_id AS aid, t.amount FROM accounts ac "
+        "JOIN transactions t ON ac.account_id = t.account_id WHERE ac.balance > 0",
+        "equivalent",
+    )
+
+
+def test_cte_filter_divergent_from_unfiltered():
+    _check(
+        "WITH a AS (SELECT account_id AS aid FROM accounts WHERE balance > 100) "
+        "SELECT aid FROM a",
+        "SELECT account_id AS aid FROM accounts",
+        "divergent",
+    )
+
+
+def test_aggregating_cte_body_equals_flat():
+    # Materialization (VeriEQL's With): an aggregating CTE body — impossible to
+    # flatten — proves equal to the flat aggregate query.
+    _check(
+        "WITH g AS (SELECT dept AS d, SUM(amount) AS s FROM transactions GROUP BY dept) "
+        "SELECT d, s FROM g",
+        "SELECT dept AS d, SUM(amount) AS s FROM transactions GROUP BY dept",
+        "equivalent",
+    )
+
+
+def test_filter_on_cte_aggregate_divergent():
+    # Filtering on a CTE's aggregate output — the materialized relation's column
+    # is read like any other. Different thresholds must diverge.
+    _check(
+        "WITH g AS (SELECT dept AS d, SUM(amount) AS s FROM transactions GROUP BY dept) "
+        "SELECT d FROM g WHERE s > 5",
+        "WITH g AS (SELECT dept AS d, SUM(amount) AS s FROM transactions GROUP BY dept) "
+        "SELECT d FROM g WHERE s > 500",
+        "divergent",
+    )
+
+
+def test_multi_table_cte_body_equals_flat():
+    # A CTE whose body itself joins — also impossible to flatten — materializes
+    # and proves equal to the flat join.
+    _check(
+        "WITH j AS (SELECT a.account_id AS aid, t.amount AS amt FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id) SELECT aid, amt FROM j",
+        "SELECT a.account_id AS aid, t.amount AS amt FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id",
+        "equivalent",
+    )
+
+
+def test_cte_inner_joined_to_table_equals_flat():
+    _check(
+        "WITH a AS (SELECT account_id AS aid FROM accounts WHERE balance > 0) "
+        "SELECT a.aid, t.amount FROM a JOIN transactions t ON a.aid = t.account_id",
+        "SELECT ac.account_id AS aid, t.amount FROM accounts ac "
+        "JOIN transactions t ON ac.account_id = t.account_id WHERE ac.balance > 0",
+        "equivalent",
+    )
+
+
+def test_cte_on_outer_join_side_rejected():
+    # Scope (FROM + INNER joins): a materialized CTE on an outer-join side needs
+    # null-extension handling the inner path doesn't provide. Fail-closed.
+    q = ("WITH tx AS (SELECT account_id AS aid FROM transactions) "
+         "SELECT a.account_id FROM accounts a LEFT JOIN tx ON a.account_id = tx.aid")
+    _check(q, q, "error", msg_contains="outer")
+
+
+def test_recursive_cte_rejected():
+    q = ("WITH RECURSIVE c AS (SELECT account_id FROM accounts) "
+         "SELECT account_id FROM c")
+    _check(q, q, "error", msg_contains="Recursive")
+
+
+def test_cte_on_cte_rejected():
+    # CTE-on-CTE (a CTE body referencing another CTE) is not supported yet.
+    q = ("WITH a AS (SELECT account_id AS aid FROM accounts), "
+         "b AS (SELECT aid FROM a) SELECT aid FROM b")
+    _check(q, q, "error", msg_contains="another CTE")
+
+
+def test_cte_over_table_also_joined_to_that_table():
+    # A CTE over `accounts` joined back to `accounts` on the PK yields each
+    # account once — equal to a plain select. Materialization treats the CTE as
+    # an independent relation while sharing the base rows (a case inlining would
+    # have rejected as a self-join).
+    _check(
+        "WITH c AS (SELECT account_id AS aid FROM accounts) "
+        "SELECT c.aid, a.balance AS b FROM c JOIN accounts a ON c.aid = a.account_id",
+        "SELECT account_id AS aid, balance AS b FROM accounts",
+        "equivalent",
+    )
+
+
 def test_select_star_rejected():
     q = "SELECT * FROM accounts"
     _check(q, q, "error", msg_contains="Unsupported SELECT")
