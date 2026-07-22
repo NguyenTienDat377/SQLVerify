@@ -134,14 +134,64 @@ def test_right_join_vs_inner_join_divergent():
 
 # ── Fail-closed parsing (fix #1) ─────────────────────────────────────────────
 
-def test_or_predicate_rejected():
+# ── OR / IN / NOT predicates (three-valued Kleene logic, paper Fig. 4/5) ─────
+
+def test_or_predicate_self_equivalent():
     q = "SELECT account_id FROM accounts WHERE balance > 1 OR balance < -5"
-    _check(q, q, "error", msg_contains="Unsupported")
+    _check(q, q, "equivalent")
 
 
-def test_in_predicate_rejected():
-    q = "SELECT account_id FROM accounts WHERE balance IN (1, 2)"
-    _check(q, q, "error", msg_contains="Unsupported")
+def test_or_vs_and_divergent():
+    # OR and AND of the same two comparisons are not the same filter.
+    _check(
+        "SELECT account_id FROM accounts WHERE balance > 1 OR balance < 5",
+        "SELECT account_id FROM accounts WHERE balance > 1 AND balance < 5",
+        "divergent",
+    )
+
+
+def test_in_list_equals_or_of_equalities():
+    # IN (1, 2) is exactly `= 1 OR = 2` — the desugaring must be equivalent.
+    _check(
+        "SELECT account_id FROM accounts WHERE balance IN (1, 2)",
+        "SELECT account_id FROM accounts WHERE balance = 1 OR balance = 2",
+        "equivalent",
+    )
+
+
+def test_in_list_vs_single_value_divergent():
+    _check(
+        "SELECT account_id FROM accounts WHERE balance IN (1, 2)",
+        "SELECT account_id FROM accounts WHERE balance = 1",
+        "divergent",
+    )
+
+
+def test_not_in_is_de_morgan_conjunction():
+    # NOT IN (1,2) ≡ <> 1 AND <> 2 under three-valued logic (a NULL balance is
+    # dropped by both — NOT(NULL) is NULL, and <> on a NULL operand is NULL).
+    _check(
+        "SELECT account_id FROM accounts WHERE balance NOT IN (1, 2)",
+        "SELECT account_id FROM accounts WHERE balance <> 1 AND balance <> 2",
+        "equivalent",
+    )
+
+
+def test_or_with_is_null_keeps_null_rows():
+    # `= 1 OR IS NULL` keeps NULL rows that a bare `= 1` drops → divergent.
+    # Guards that OR composes the three-valued halves correctly around NULLs.
+    _check(
+        "SELECT account_id FROM accounts WHERE balance = 1 OR balance IS NULL",
+        "SELECT account_id FROM accounts WHERE balance = 1",
+        "divergent",
+    )
+
+
+def test_in_subquery_still_rejected():
+    # The subquery membership form (paper's E⃗ ∈ Q semi-join) is not yet built.
+    q = ("SELECT account_id FROM accounts WHERE account_id IN "
+         "(SELECT account_id FROM transactions)")
+    _check(q, q, "error", msg_contains="subquer")
 
 
 def test_select_star_rejected():

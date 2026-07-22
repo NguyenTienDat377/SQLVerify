@@ -9,10 +9,13 @@ Supported subset:
   JOIN     — any number of INNER joins, OR one LEFT/RIGHT join, each with a
              simple ON equality condition. Outer joins cannot be combined with
              another join (multi-table joins must be INNER).
-  WHERE    — AND chains of comparisons (column vs literal, column vs column),
-             IS NULL / IS NOT NULL
+  WHERE    — boolean combinations (AND / OR / NOT) of comparisons (column vs
+             literal, column vs column), IS NULL / IS NOT NULL, and
+             IN (value-list). Evaluated under three-valued (Kleene) logic per
+             the VeriEQL grammar (Fig. 4) and filter rule (Fig. 5).
   GROUP BY — one or more columns from any joined table
-  HAVING   — aggregate comparisons (SUM(col) > v, COUNT(*) = v, ...)
+  HAVING   — aggregate comparisons (SUM(col) > v, COUNT(*) = v, ...), also
+             combinable with AND / OR / NOT
 
 Fail-closed policy: anything outside this subset raises ValueError instead of
 being silently dropped. A verifier must never weaken the encoded query — a
@@ -21,8 +24,9 @@ dropped predicate or SELECT expression can turn a real divergence into a false
 
 Out of scope (all rejected with ValueError):
   FULL OUTER / CROSS joins, self-joins, outer joins combined with another join,
-  OR / IN / BETWEEN / LIKE predicates, window functions, CTEs, subqueries,
-  UNION, DISTINCT, LIMIT/OFFSET, string/timestamp ordering comparisons.
+  IN (SELECT ...) subquery membership, BETWEEN / LIKE predicates, window
+  functions, CTEs, subqueries, UNION, DISTINCT, LIMIT/OFFSET, string/timestamp
+  ordering comparisons.
   (ORDER BY is accepted but ignored — equivalence is checked under bag
   semantics, where output order is immaterial.)
 
@@ -42,7 +46,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Optional
 
 import sqlglot
@@ -84,6 +88,33 @@ class ParsedCondition:
 
 
 @dataclass
+class BoolNode:
+    """A boolean combination of predicates, evaluated under three-valued
+    (Kleene) logic — the paper's φ ∧ φ | φ ∨ φ | ¬φ productions (Fig. 4, p.7).
+
+    op       — 'and' | 'or' | 'not'
+    children — leaf ParsedConditions or nested BoolNodes ('not' has exactly one).
+
+    A WHERE/HAVING clause parses to a tree whose root is a BoolNode or a bare
+    ParsedCondition leaf (or None when absent). Encoded via _eval_tf().
+    """
+    op: str
+    children: list
+
+
+def _iter_pred_leaves(node):
+    """Yield every ParsedCondition leaf in a predicate tree (for reference
+    resolution and WHERE/HAVING validation). None trees yield nothing."""
+    if node is None:
+        return
+    if isinstance(node, ParsedCondition):
+        yield node
+        return
+    for ch in node.children:
+        yield from _iter_pred_leaves(ch)
+
+
+@dataclass
 class ParsedSelectExpr:
     """One expression in the SELECT list."""
     alias: str                    # output column name
@@ -114,8 +145,10 @@ class ParsedQuery:
     joins: list[ParsedJoin]
     select_exprs: list[ParsedSelectExpr]
     group_by: list[tuple[Optional[str], str]]    # [(table_alias, col_name)]
-    where_conditions: list[ParsedCondition]
-    having_conditions: list[ParsedCondition]
+    # Predicate trees (BoolNode | ParsedCondition leaf | None), not flat lists:
+    # WHERE/HAVING may now be arbitrary AND/OR/NOT combinations.
+    where_conditions: Optional[object]
+    having_conditions: Optional[object]
 
 
 # ── Symbolic database ────────────────────────────────────────────────────────
@@ -385,13 +418,6 @@ _COMPARISON_OPS = {
     exp.LT: "lt", exp.LTE: "lte",
 }
 
-_NEGATION_MAP = {
-    "gt": "lte", "gte": "lt",
-    "lt": "gte", "lte": "gt",
-    "eq": "neq", "neq": "eq",
-}
-
-
 def _require_literal(node: exp.Expression) -> object:
     """Extract a Python int/float/str from a literal AST node, or raise.
 
@@ -414,116 +440,159 @@ def _require_literal(node: exp.Expression) -> object:
     raise ValueError(f"Unsupported literal in predicate: {node.sql()}")
 
 
-def _parse_conditions(node: exp.Expression) -> list[ParsedCondition]:
-    """Recursively extract WHERE / HAVING conditions from an AST node.
+def _parse_predicate(node: exp.Expression):
+    """Parse a WHERE / HAVING AST node into a three-valued predicate tree.
 
-    Raises ValueError on anything outside the supported subset (OR, IN,
-    BETWEEN, LIKE, ...). Silently dropping a predicate would weaken the
-    encoded query and could produce a false 'equivalent' verdict.
+    Returns a BoolNode ('and' | 'or' | 'not') or a leaf ParsedCondition (or
+    None for an absent clause). Follows the paper's predicate grammar (Fig. 4,
+    p.7): φ ::= b | Null | A ⊙ A | IsNull(E) | E⃗ ∈ Q | φ ∧ φ | φ ∨ φ | ¬φ —
+    so AND / OR / NOT and comparisons are first-class. `IN (v1, v2, ...)` over a
+    value/column list is sugar for a disjunction of equalities (A=v1 ∨ A=v2 ∨…);
+    `IN (SELECT ...)` (the paper's E⃗ ∈ Q semi-join) is still rejected.
+
+    Raises ValueError on anything outside the supported subset — never drops a
+    predicate silently (a dropped predicate can turn a real divergence into a
+    false 'equivalent').
     """
     if node is None:
-        return []
+        return None
 
     if isinstance(node, exp.Paren):
-        return _parse_conditions(node.this)
+        return _parse_predicate(node.this)
 
     if isinstance(node, exp.And):
-        return _parse_conditions(node.left) + _parse_conditions(node.right)
+        return _bool_node("and", node.left, node.right)
 
-    # Comparison operators: col vs literal, col vs col, aggregate vs literal
-    for node_type, op_str in _COMPARISON_OPS.items():
-        if not isinstance(node, node_type):
-            continue
-        left, right = node.this, node.expression
+    if isinstance(node, exp.Or):
+        return _bool_node("or", node.left, node.right)
 
-        if isinstance(left, exp.Column):
-            tbl = left.args.get("table")
-            if isinstance(right, exp.Column):
-                rtbl = right.args.get("table")
-                return [ParsedCondition(
-                    op=op_str,
-                    table_alias=tbl.name if tbl else None,
-                    col=left.name,
-                    value=None,
-                    rhs_table_alias=rtbl.name if rtbl else None,
-                    rhs_col=right.name,
-                )]
-            return [ParsedCondition(
-                op=op_str,
-                table_alias=tbl.name if tbl else None,
-                col=left.name,
-                value=_require_literal(right),
-            )]
-
-        # Aggregate comparison in HAVING (SUM(x) > v, COUNT(*) = v, ...)
-        if isinstance(left, (exp.Sum, exp.Count)):
-            agg_type, agg_col, agg_tbl = _parse_aggregate(left)
-            return [ParsedCondition(
-                op=f"having_{op_str}",
-                table_alias=None,
-                col=None,
-                value=_require_literal(right),
-                agg_type=agg_type,
-                agg_col=agg_col,
-                agg_table_alias=agg_tbl,
-            )]
-
-        raise ValueError(f"Unsupported comparison: {node.sql()}")
-
-    # IS NULL
-    if isinstance(node, exp.Is):
-        col_node = node.this
-        if isinstance(col_node, exp.Column) and isinstance(node.expression, exp.Null):
-            tbl = col_node.args.get("table")
-            return [ParsedCondition(
-                op="is_null",
-                table_alias=tbl.name if tbl else None,
-                col=col_node.name,
-                value=None,
-            )]
-        raise ValueError(f"Unsupported IS predicate: {node.sql()}")
-
-    # NOT — IS NOT NULL, or negation of a single comparison
     if isinstance(node, exp.Not):
         inner = node.this
         while isinstance(inner, exp.Paren):
             inner = inner.this
-
-        if isinstance(inner, exp.Is):
-            col_node = inner.this
-            if isinstance(col_node, exp.Column) and isinstance(inner.expression, exp.Null):
-                tbl = col_node.args.get("table")
-                return [ParsedCondition(
-                    op="is_not_null",
-                    table_alias=tbl.name if tbl else None,
-                    col=col_node.name,
-                    value=None,
-                )]
-            raise ValueError(f"Unsupported IS predicate: {node.sql()}")
-
-        conds = _parse_conditions(inner)
-        # NOT over an AND-chain is an OR by De Morgan — out of scope. Negating
-        # each conjunct independently would be silently wrong.
-        if len(conds) != 1:
+        child = _parse_predicate(inner)
+        if child is None:
             raise ValueError(f"Unsupported negation: {node.sql()}")
-        cond = conds[0]
-        base = cond.op
-        prefix = ""
-        if base.startswith("having_"):
-            prefix, base = "having_", base[len("having_"):]
-        if base == "is_null":
-            return [replace(cond, op=prefix + "is_not_null")]
-        if base == "is_not_null":
-            return [replace(cond, op=prefix + "is_null")]
-        if base in _NEGATION_MAP:
-            return [replace(cond, op=prefix + _NEGATION_MAP[base])]
-        raise ValueError(f"Unsupported negation: {node.sql()}")
+        return BoolNode(op="not", children=[child])
+
+    if isinstance(node, exp.In):
+        return _parse_in(node)
+
+    # Comparison operators: col vs literal, col vs col, aggregate vs literal
+    for node_type, op_str in _COMPARISON_OPS.items():
+        if isinstance(node, node_type):
+            return _parse_comparison(node, op_str)
+
+    # IS NULL. (IS NOT NULL arrives as Not(Is(...)) and is handled above.)
+    if isinstance(node, exp.Is):
+        col_node = node.this
+        if isinstance(col_node, exp.Column) and isinstance(node.expression, exp.Null):
+            tbl = col_node.args.get("table")
+            return ParsedCondition(
+                op="is_null",
+                table_alias=tbl.name if tbl else None,
+                col=col_node.name,
+                value=None,
+            )
+        raise ValueError(f"Unsupported IS predicate: {node.sql()}")
 
     raise ValueError(
-        f"Unsupported WHERE/HAVING construct: {node.sql()} — "
-        "V1 supports AND-chains of comparisons, IS [NOT] NULL, and "
-        "aggregate comparisons (no OR / IN / BETWEEN / LIKE)."
+        f"Unsupported WHERE/HAVING construct: {node.sql()} — supported: "
+        "AND / OR / NOT, comparisons, IN (value-list), IS [NOT] NULL, and "
+        "aggregate comparisons (IN (SELECT ...) subqueries are not yet supported)."
     )
+
+
+def _bool_node(op: str, left: exp.Expression, right: exp.Expression) -> BoolNode:
+    """Build a BoolNode for a binary AND/OR, flattening nested same-op children
+    so `a AND b AND c` becomes one 3-child node rather than a lopsided tree."""
+    children = []
+    for side in (_parse_predicate(left), _parse_predicate(right)):
+        if isinstance(side, BoolNode) and side.op == op:
+            children.extend(side.children)
+        else:
+            children.append(side)
+    return BoolNode(op=op, children=children)
+
+
+def _parse_comparison(node: exp.Expression, op_str: str) -> ParsedCondition:
+    """Parse a single comparison into a leaf ParsedCondition: column vs literal,
+    column vs column, or aggregate vs literal (HAVING)."""
+    left, right = node.this, node.expression
+
+    if isinstance(left, exp.Column):
+        tbl = left.args.get("table")
+        if isinstance(right, exp.Column):
+            rtbl = right.args.get("table")
+            return ParsedCondition(
+                op=op_str,
+                table_alias=tbl.name if tbl else None,
+                col=left.name,
+                value=None,
+                rhs_table_alias=rtbl.name if rtbl else None,
+                rhs_col=right.name,
+            )
+        return ParsedCondition(
+            op=op_str,
+            table_alias=tbl.name if tbl else None,
+            col=left.name,
+            value=_require_literal(right),
+        )
+
+    # Aggregate comparison in HAVING (SUM(x) > v, COUNT(*) = v, ...)
+    if isinstance(left, (exp.Sum, exp.Count)):
+        agg_type, agg_col, agg_tbl = _parse_aggregate(left)
+        return ParsedCondition(
+            op=f"having_{op_str}",
+            table_alias=None,
+            col=None,
+            value=_require_literal(right),
+            agg_type=agg_type,
+            agg_col=agg_col,
+            agg_table_alias=agg_tbl,
+        )
+
+    raise ValueError(f"Unsupported comparison: {node.sql()}")
+
+
+def _parse_in(node: exp.In):
+    """Desugar `col IN (v1, v2, ...)` into `col = v1 OR col = v2 OR ...`.
+
+    Each list item may be a literal or another column (reusing the col-vs-col
+    equality leaf). `col IN (SELECT ...)` — the paper's E⃗ ∈ Q membership over a
+    subquery — is a semi-join and is not yet supported; rejected fail-closed.
+    """
+    if node.args.get("query") is not None:
+        raise ValueError("IN (SELECT ...) subqueries are not yet supported.")
+
+    left = node.this
+    if not isinstance(left, exp.Column):
+        raise ValueError(f"IN must test a column: {node.sql()}")
+
+    items = node.expressions or []
+    if not items:
+        raise ValueError(f"Empty IN list: {node.sql()}")
+    if any(isinstance(it, (exp.Select, exp.Subquery)) for it in items):
+        raise ValueError("IN (SELECT ...) subqueries are not yet supported.")
+
+    tbl = left.args.get("table")
+    talias = tbl.name if tbl else None
+    children = []
+    for it in items:
+        if isinstance(it, exp.Column):
+            rtbl = it.args.get("table")
+            children.append(ParsedCondition(
+                op="eq", table_alias=talias, col=left.name, value=None,
+                rhs_table_alias=rtbl.name if rtbl else None, rhs_col=it.name,
+            ))
+        else:
+            children.append(ParsedCondition(
+                op="eq", table_alias=talias, col=left.name,
+                value=_require_literal(it),
+            ))
+    if len(children) == 1:
+        return children[0]
+    return BoolNode(op="or", children=children)
 
 
 def _parse_aggregate(node: exp.Expression) -> tuple[str, Optional[str], Optional[str]]:
@@ -736,19 +805,19 @@ def parse_query(sql: str, dialect: str = "generic") -> ParsedQuery:
             group_by.append((tbl.name if tbl else None, g_expr.name))
 
     # ── WHERE ────────────────────────────────────────────────────────────────
-    where_conditions: list[ParsedCondition] = []
+    where_conditions = None
     where_node = arg("where")
     if where_node:
-        where_conditions = _parse_conditions(where_node.this)
-        if any(c.op.startswith("having_") for c in where_conditions):
+        where_conditions = _parse_predicate(where_node.this)
+        if any(c.op.startswith("having_") for c in _iter_pred_leaves(where_conditions)):
             raise ValueError("Aggregate comparisons belong in HAVING, not WHERE.")
 
     # ── HAVING ───────────────────────────────────────────────────────────────
-    having_conditions: list[ParsedCondition] = []
+    having_conditions = None
     having_node = arg("having")
     if having_node:
-        having_conditions = _parse_conditions(having_node.this)
-        for cond in having_conditions:
+        having_conditions = _parse_predicate(having_node.this)
+        for cond in _iter_pred_leaves(having_conditions):
             if cond.agg_type is None:
                 raise ValueError(
                     "V1 supports only aggregate comparisons in HAVING "
@@ -815,7 +884,8 @@ def _resolve_references(parsed: ParsedQuery, alias_map: dict[str, str], db: Symb
         for (a, c) in parsed.group_by
     ]
 
-    for cond in parsed.where_conditions + parsed.having_conditions:
+    for cond in (*_iter_pred_leaves(parsed.where_conditions),
+                 *_iter_pred_leaves(parsed.having_conditions)):
         if cond.col is not None:
             cond.table_alias = _resolve_column(
                 cond.table_alias, cond.col, alias_map, db, "WHERE/HAVING")
@@ -938,12 +1008,16 @@ def encode_query(
         return f
 
     # ── WHERE: evaluated on the post-join tuple (three-valued: TRUE keeps) ───
+    # Paper Fig. 5: σ_φ(Q) = filter(Q, λx.[[φ]]_x = ⊤) — a row survives iff the
+    # predicate's `is_true` half holds (NULL and FALSE both drop it).
     def where_all(cellfn) -> BoolRef:
-        clauses = [
-            _pred_true(cond, alias_map, db, schema, cellfn)
-            for cond in parsed.where_conditions
-        ]
-        return And(clauses) if clauses else BoolVal(True)
+        if parsed.where_conditions is None:
+            return BoolVal(True)
+        t, _ = _eval_tf(
+            parsed.where_conditions,
+            lambda cond: _pred_tf(cond, alias_map, db, schema, cellfn),
+        )
+        return t
 
     # ── INNER join bag: one entry per combination of rows across all tables ──
     def build_inner_join_bag() -> list[tuple[BoolRef, object]]:
@@ -1073,12 +1147,18 @@ def encode_query(
         raise ValueError(f"Unsupported aggregate type: {sel.expr_type}")
 
     def having_clauses(contribs: list) -> list[BoolRef]:
-        """HAVING aggregates are computed fresh from the group's contributions
+        """Encode the HAVING predicate tree to its `is_true` Z3 Bool, returned
+        as a 0-or-1 element list so callers can splat it into an And().
+
+        HAVING aggregates are computed fresh from the group's contributions
         rather than matched to SELECT aliases — a HAVING aggregate need not
         appear in the SELECT list, and matching by alias would wrongly reuse a
-        COALESCEd value."""
-        clauses = []
-        for cond in parsed.having_conditions:
+        COALESCEd value. AND/OR/NOT over aggregate comparisons is supported via
+        the same three-valued evaluator as WHERE."""
+        if parsed.having_conditions is None:
+            return []
+
+        def leaf_tf(cond: ParsedCondition):
             if isinstance(cond.value, (int, float)):
                 db.note_numeric_literal(cond.value)
             synth = ParsedSelectExpr(
@@ -1087,11 +1167,10 @@ def encode_query(
                 table_alias=cond.agg_table_alias,
                 col_name=cond.agg_col,
             )
-            hc = _having_pred(cond, agg_value(synth, contribs))
-            if hc is None:
-                raise ValueError("Unsupported HAVING condition.")
-            clauses.append(hc)
-        return clauses
+            return _having_tf(cond, agg_value(synth, contribs))
+
+        t, _ = _eval_tf(parsed.having_conditions, leaf_tf)
+        return [t]
 
     col_aliases = [sel.alias for sel in parsed.select_exprs]
     arity = len(col_aliases)
@@ -1345,42 +1424,78 @@ def encode_query(
 
 # ── Condition → Z3 helpers ───────────────────────────────────────────────────
 
-def _pred_true(
+def _cmp(op: str, a, b) -> BoolRef:
+    """The Z3 relation for a comparison op ('eq'|'neq'|'gt'|'gte'|'lt'|'lte'),
+    stripped of any 'having_' prefix. Used to build both the TRUE and FALSE
+    halves of a three-valued predicate."""
+    op = op.replace("having_", "")
+    if op == "eq":  return a == b
+    if op == "neq": return a != b
+    if op == "gt":  return a > b
+    if op == "gte": return a >= b
+    if op == "lt":  return a < b
+    if op == "lte": return a <= b
+    raise ValueError(f"Unsupported comparison operator '{op}'.")
+
+
+def _eval_tf(node, leaf_tf) -> tuple[BoolRef, BoolRef]:
+    """Evaluate a predicate tree under three-valued (Kleene) logic, returning
+    the (is_true, is_false) pair. The predicate is NULL exactly when neither
+    holds. `leaf_tf(cond)` supplies the pair for a leaf ParsedCondition.
+
+        AND: (tA ∧ tB, fA ∨ fB)      OR: (tA ∨ tB, fA ∧ fB)      NOT: swap (t, f)
+
+    A WHERE/HAVING filter keeps a tuple iff the returned `is_true` holds (paper
+    Fig. 5). The `is_false` half only matters under a NOT, where it becomes the
+    new `is_true` — which is why ¬φ over a NULL φ stays NULL (both halves false).
+    """
+    if isinstance(node, ParsedCondition):
+        return leaf_tf(node)
+    if node.op == "not":
+        t, f = _eval_tf(node.children[0], leaf_tf)
+        return (f, t)
+    parts = [_eval_tf(ch, leaf_tf) for ch in node.children]
+    ts = [p[0] for p in parts]
+    fs = [p[1] for p in parts]
+    if node.op == "and":
+        return (And(ts), Or(fs))
+    if node.op == "or":
+        return (Or(ts), And(fs))
+    raise ValueError(f"Unsupported boolean operator '{node.op}'.")
+
+
+def _pred_tf(
     cond: ParsedCondition,
     alias_map: dict[str, str],
     db: SymbolicDB,
     schema: SchemaModel,
     cellfn,
-) -> BoolRef:
+) -> tuple[BoolRef, BoolRef]:
     """
-    Encode a predicate under three-valued logic and return a Z3 Bool that is
-    TRUE iff the predicate evaluates to TRUE (a filter keeps a row only then;
-    NULL and FALSE both fail). Cells are read through `cellfn(alias, col)` so
-    the same predicate works in matched-pair and null-extended row contexts.
+    Encode a single leaf predicate under three-valued logic, returning
+    (is_true, is_false). A comparison against a NULL operand is NULL (both
+    halves false); IS [NOT] NULL are the only two-valued predicates. Cells are
+    read through `cellfn(alias, col)` so the same predicate works in matched-
+    pair and null-extended row contexts.
 
     Raises ValueError on anything that cannot be encoded — never drops a
     predicate silently.
     """
     is_null, val = cellfn(cond.table_alias, cond.col)
 
-    # NULL checks are the only predicates that can yield TRUE on a NULL value.
+    # NULL checks are total (never NULL themselves): TRUE and FALSE partition.
     if cond.op == "is_null":
-        return is_null
+        return (is_null, Not(is_null))
     if cond.op == "is_not_null":
-        return Not(is_null)
+        return (Not(is_null), is_null)
 
     # ── Column-vs-column predicate (e.g. WHERE b = a) ────────────────────────
-    # TRUE only when both cells are non-NULL and the values relate as required.
+    # NULL unless both cells are non-NULL; then TRUE/FALSE by the relation.
     if cond.rhs_col is not None:
         r_is_null, r_val = cellfn(cond.rhs_table_alias, cond.rhs_col)
         both_nn = And(Not(is_null), Not(r_is_null))
-        if cond.op == "eq":  return And(both_nn, val == r_val)
-        if cond.op == "neq": return And(both_nn, val != r_val)
-        if cond.op == "gt":  return And(both_nn, val > r_val)
-        if cond.op == "gte": return And(both_nn, val >= r_val)
-        if cond.op == "lt":  return And(both_nn, val < r_val)
-        if cond.op == "lte": return And(both_nn, val <= r_val)
-        raise ValueError(f"Unsupported column comparison operator '{cond.op}'.")
+        rel = _cmp(cond.op, val, r_val)
+        return (And(both_nn, rel), And(both_nn, Not(rel)))
 
     if cond.value is None:
         raise ValueError(f"Unsupported predicate on column '{cond.col}'.")
@@ -1412,31 +1527,20 @@ def _pred_true(
         db.note_numeric_literal(cond.value)
         rhs = RealVal(float(cond.value)) if col_type == "REAL" else IntVal(int(cond.value))
 
-    notnull = Not(is_null)   # comparisons against a NULL operand are never TRUE
-
-    if cond.op == "eq":  return And(notnull, val == rhs)
-    if cond.op == "neq": return And(notnull, val != rhs)
-    if cond.op == "gt":  return And(notnull, val > rhs)
-    if cond.op == "gte": return And(notnull, val >= rhs)
-    if cond.op == "lt":  return And(notnull, val < rhs)
-    if cond.op == "lte": return And(notnull, val <= rhs)
-
-    raise ValueError(f"Unsupported comparison operator '{cond.op}'.")
+    # A comparison with a NULL operand is NULL (neither TRUE nor FALSE).
+    notnull = Not(is_null)
+    rel = _cmp(cond.op, val, rhs)
+    return (And(notnull, rel), And(notnull, Not(rel)))
 
 
-def _having_pred(cond: ParsedCondition, sv: SymValue) -> Optional[BoolRef]:
-    """Three-valued HAVING predicate over a group's aggregate SymValue.
-    TRUE only when the aggregate is non-NULL and the comparison holds."""
+def _having_tf(cond: ParsedCondition, sv: SymValue) -> tuple[BoolRef, BoolRef]:
+    """Three-valued (is_true, is_false) for a HAVING aggregate comparison over a
+    group's aggregate SymValue. NULL when the aggregate is NULL (e.g. SUM over an
+    empty/all-NULL group), so the group survives only when `is_true` holds."""
     val = cond.value
     if val is None:
-        return None
+        raise ValueError("Unsupported HAVING condition.")
     rhs = RealVal(float(val)) if isinstance(val, float) else IntVal(int(val))
     notnull = Not(sv.is_null)
-    op = cond.op.replace("having_", "")
-    if op == "gt":  return And(notnull, sv.value > rhs)
-    if op == "gte": return And(notnull, sv.value >= rhs)
-    if op == "lt":  return And(notnull, sv.value < rhs)
-    if op == "lte": return And(notnull, sv.value <= rhs)
-    if op == "eq":  return And(notnull, sv.value == rhs)
-    if op == "neq": return And(notnull, sv.value != rhs)
-    return None
+    rel = _cmp(cond.op, sv.value, rhs)
+    return (And(notnull, rel), And(notnull, Not(rel)))

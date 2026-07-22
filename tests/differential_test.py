@@ -124,13 +124,22 @@ def render_ddl(tables: list[GenTable]) -> str:
 
 @dataclass
 class Pred:
-    kind: str                       # 'cmp_lit' | 'cmp_col' | 'null'
-    lhs: tuple[str, str]            # (alias, col)
-    op: str = "="                   # = <> > >= < <=  (or IS NULL / IS NOT NULL)
+    kind: str                       # 'cmp_lit' | 'cmp_col' | 'null' | 'in' | 'or' | 'not'
+    lhs: Optional[tuple[str, str]] = None   # (alias, col) for atoms / 'in'
+    op: str = "="                   # = <> > >= < <=  (or IS [NOT] NULL / IN / NOT IN)
     lit: object = None              # int or str for cmp_lit
     rhs: Optional[tuple[str, str]] = None   # for cmp_col
+    lits: Optional[list] = None     # int literal list for 'in' / 'not in'
+    children: Optional[list] = None  # sub-Preds for 'or' (≥2) / 'not' (exactly 1)
 
     def render(self) -> str:
+        if self.kind == "or":
+            return "(" + " OR ".join(c.render() for c in self.children) + ")"
+        if self.kind == "not":
+            return "NOT (" + self.children[0].render() + ")"
+        if self.kind == "in":
+            vals = ", ".join(str(v) for v in self.lits)
+            return f"{self.lhs[0]}.{self.lhs[1]} {self.op} ({vals})"
         l = f"{self.lhs[0]}.{self.lhs[1]}"
         if self.kind == "null":
             return f"{l} {self.op}"          # op is 'IS NULL' / 'IS NOT NULL'
@@ -212,7 +221,8 @@ def _query_cols(tables: list[GenTable], join_type: Optional[str]):
     return out
 
 
-def gen_pred(rng: random.Random, cols) -> Pred:
+def gen_atom(rng: random.Random, cols) -> Pred:
+    """A single atomic predicate: comparison to a literal/column or IS [NOT] NULL."""
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
     txt_cols = [(a, n) for a, n, t, _ in cols if t == "TEXT"]
     roll = rng.random()
@@ -229,6 +239,29 @@ def gen_pred(rng: random.Random, cols) -> Pred:
     return Pred("cmp_col", rng.choice(num_cols),
                 rng.choice(["=", "<>", ">", ">=", "<", "<="]),
                 rhs=rng.choice(num_cols))
+
+
+def gen_pred(rng: random.Random, cols) -> Pred:
+    """A WHERE conjunct: usually an atom, but sometimes an OR-group, an
+    IN / NOT IN over an integer list, or a NOT-wrapped atom — so the fuzzer
+    attacks the three-valued OR/IN/NOT encoding against the SQLite oracle."""
+    num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
+    roll = rng.random()
+    if roll < 0.14 and num_cols:
+        # col IN (v1, v2[, v3]) / NOT IN — integer literals only (a NULL in the
+        # list is rejected fail-closed by the encoder, so we never generate one).
+        lits = [rng.randint(LIT_LO, LIT_HI)
+                for _ in range(rng.randint(2, 3))]
+        return Pred("in", rng.choice(num_cols),
+                    rng.choice(["IN", "NOT IN"]), lits=lits)
+    if roll < 0.28:
+        # (atom OR atom) — occasionally a 3-way disjunction.
+        k = rng.choice([2, 2, 3])
+        return Pred("or", children=[gen_atom(rng, cols) for _ in range(k)])
+    if roll < 0.35:
+        # NOT (atom) — exercises the ¬φ tree node and its three-valued swap.
+        return Pred("not", children=[gen_atom(rng, cols)])
+    return gen_atom(rng, cols)
 
 
 def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:

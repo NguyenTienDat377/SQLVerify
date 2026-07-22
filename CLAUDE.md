@@ -349,7 +349,7 @@ Everything outside the supported subset is **rejected with a clear error** (fail
 - No CTEs (`WITH` clauses)
 - No window functions (`ROW_NUMBER`, `RANK`, etc.)
 - No subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`
-- No `OR` / `IN` / `BETWEEN` / `LIKE` in WHERE/HAVING — AND-chains of comparisons and `IS [NOT] NULL` only
+- WHERE/HAVING are full boolean trees of `AND` / `OR` / `NOT` over comparisons and `IS [NOT] NULL`, encoded under three-valued (Kleene) logic per the VeriEQL grammar (Fig. 4) and filter rule (Fig. 5: a row survives iff the predicate is TRUE). `IN (value-list)` is supported (desugars to `= v1 OR = v2 …`); `NOT IN` and `NOT (…)` too. Still rejected: `IN (SELECT …)` subquery membership, `BETWEEN`, `LIKE`.
 - NULLs ARE modeled (each cell is a `(is_null, value)` pair, three-valued logic per the VeriEQL paper): `IS NULL` / `IS NOT NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT JOIN null-extension are all encoded. NOT NULL / PK columns forced non-NULL; FK columns may be NULL.
 - WHERE/HAVING predicates: column vs literal AND column vs column (e.g. `WHERE b = a`) are both encoded under three-valued logic
 - ON vs WHERE is encoded faithfully for outer joins: a right-table filter in WHERE makes LEFT JOIN ≡ INNER JOIN; `WHERE right.col IS NULL` keeps the anti-join idiom
@@ -358,7 +358,7 @@ Everything outside the supported subset is **rejected with a clear error** (fail
 - CHECK constraints parsed but not encoded into Z3 (FK/PK/NOT NULL cover most real bugs)
 - Equivalence is checked under **bag semantics** via tuple multiplicity (paper Eqns 1–2); no list semantics — `ORDER BY` is accepted but ignored
 - GROUP BY merges rows with equal keys (Dedup). For INNER (and no-join) queries, group keys and bare SELECT columns may come from any joined table. A bare SELECT column must still appear in GROUP BY (ambiguous projections — invalid in standard SQL — are rejected). The single LEFT/RIGHT outer-join path keeps the older restriction: group keys must come from the FROM table, and RIGHT JOIN + GROUP BY requires non-nullable group keys.
-- HAVING supports aggregate comparisons; the aggregate does NOT need to appear in the SELECT list
+- HAVING supports aggregate comparisons (combinable with `AND` / `OR` / `NOT`); the aggregate does NOT need to appear in the SELECT list
 - Integer value domain is a finite window `[-(bound*4 + max|literal|), bound*4 + max|literal|]` — automatically widened to cover every numeric literal in the queries; an "equivalent" verdict is sound only within this window
 - `bound` (default 3) may miss bugs requiring more row interactions (rare in practice)
 - No cross-dialect comparison (e.g. PostgreSQL vs MySQL semantics)
