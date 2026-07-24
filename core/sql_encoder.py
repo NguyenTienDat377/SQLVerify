@@ -85,6 +85,13 @@ class ParsedCondition:
     # None and the comparison is between two cells under three-valued logic.
     rhs_table_alias: Optional[str] = None
     rhs_col: Optional[str] = None
+    # Membership predicate `col IN (SELECT ...)` (op == 'in_subquery'), the
+    # paper's E⃗ ∈ Q (Fig. 4). `subquery` is the parsed body (a ParsedQuery);
+    # encode_query materialises it once into `subquery_qf` (a QueryFormula) and
+    # _pred_tf turns membership into a guarded three-valued disjunction over its
+    # output tuples. Only uncorrelated, single-column bodies in WHERE are allowed.
+    subquery: Optional[object] = None
+    subquery_qf: Optional[object] = None
 
 
 @dataclass
@@ -485,7 +492,8 @@ def _parse_predicate(node: exp.Expression):
     p.7): φ ::= b | Null | A ⊙ A | IsNull(E) | E⃗ ∈ Q | φ ∧ φ | φ ∨ φ | ¬φ —
     so AND / OR / NOT and comparisons are first-class. `IN (v1, v2, ...)` over a
     value/column list is sugar for a disjunction of equalities (A=v1 ∨ A=v2 ∨…);
-    `IN (SELECT ...)` (the paper's E⃗ ∈ Q semi-join) is still rejected.
+    `IN (SELECT ...)` (the paper's E⃗ ∈ Q semi-join) is a single 'in_subquery'
+    leaf, materialised and encoded as a membership disjunction (WHERE only).
 
     Raises ValueError on anything outside the supported subset — never drops a
     predicate silently (a dropped predicate can turn a real divergence into a
@@ -535,8 +543,8 @@ def _parse_predicate(node: exp.Expression):
 
     raise ValueError(
         f"Unsupported WHERE/HAVING construct: {node.sql()} — supported: "
-        "AND / OR / NOT, comparisons, IN (value-list), IS [NOT] NULL, and "
-        "aggregate comparisons (IN (SELECT ...) subqueries are not yet supported)."
+        "AND / OR / NOT, comparisons, IN (value-list), IN (SELECT ...) in "
+        "WHERE, IS [NOT] NULL, and aggregate comparisons."
     )
 
 
@@ -593,14 +601,20 @@ def _parse_comparison(node: exp.Expression, op_str: str) -> ParsedCondition:
 
 
 def _parse_in(node: exp.In):
-    """Desugar `col IN (v1, v2, ...)` into `col = v1 OR col = v2 OR ...`.
+    """Parse an IN predicate into a three-valued leaf/subtree.
 
-    Each list item may be a literal or another column (reusing the col-vs-col
-    equality leaf). `col IN (SELECT ...)` — the paper's E⃗ ∈ Q membership over a
-    subquery — is a semi-join and is not yet supported; rejected fail-closed.
+    Two forms:
+      * `col IN (v1, v2, ...)` — desugared into `col = v1 OR col = v2 OR ...`;
+        each item may be a literal or another column (col-vs-col equality leaf).
+      * `col IN (SELECT c FROM ...)` — the paper's E⃗ ∈ Q membership (Fig. 4).
+        Returns a single `op='in_subquery'` leaf carrying the parsed, uncorrelated
+        body; encode_query materialises it and _pred_tf builds the membership
+        disjunction. Only a single-column LHS over an uncorrelated, single-column
+        body is accepted — everything else fails closed.
     """
-    if node.args.get("query") is not None:
-        raise ValueError("IN (SELECT ...) subqueries are not yet supported.")
+    query = node.args.get("query")
+    if query is not None:
+        return _parse_in_subquery(node, query)
 
     left = node.this
     if not isinstance(left, exp.Column):
@@ -630,6 +644,39 @@ def _parse_in(node: exp.In):
     if len(children) == 1:
         return children[0]
     return BoolNode(op="or", children=children)
+
+
+def _parse_in_subquery(node: exp.In, query: exp.Expression) -> ParsedCondition:
+    """Parse `col IN (SELECT c FROM ...)` into an 'in_subquery' leaf.
+
+    Fail-closed on everything outside the supported subset (uncorrelated,
+    single-column LHS, single-column body): a tuple LHS, a multi-column body, or
+    a correlated body (an outer-alias reference inside the body — caught later by
+    _resolve_references when the body is encoded) must abort, never be dropped.
+    """
+    left = node.this
+    if not isinstance(left, exp.Column):
+        raise ValueError(
+            "IN (SELECT ...) requires a single-column left-hand side; tuple "
+            f"membership is not supported: {node.sql()}")
+
+    body = query.this if isinstance(query, exp.Subquery) else query
+    if not isinstance(body, exp.Select):
+        raise ValueError(f"IN (...) subquery must be a SELECT: {node.sql()}")
+
+    parsed_body = _parse_select_ast(body)
+    if len(parsed_body.select_exprs) != 1:
+        raise ValueError(
+            "IN (SELECT ...) subquery must return exactly one column.")
+
+    tbl = left.args.get("table")
+    return ParsedCondition(
+        op="in_subquery",
+        table_alias=tbl.name if tbl else None,
+        col=left.name,
+        value=None,
+        subquery=parsed_body,
+    )
 
 
 def _parse_aggregate(node: exp.Expression) -> tuple[str, Optional[str], Optional[str]]:
@@ -799,8 +846,29 @@ def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
         raise ValueError("OFFSET is not supported in V1.")
     if stmt.find(exp.Window):
         raise ValueError("Window functions are not supported in V1.")
-    if any(s is not stmt for s in stmt.find_all(exp.Select)):
-        raise ValueError("Subqueries are not supported in V1.")
+    # Subqueries: only `col IN (SELECT ...)` in WHERE is allowed. Collect those
+    # subquery SELECTs (and everything nested within them — each validated by the
+    # recursive _parse_select_ast in _parse_in_subquery) so the blanket rejection
+    # below doesn't fire on them; every other nested SELECT (scalar subquery,
+    # EXISTS, derived table in FROM, HAVING subquery) is still rejected here.
+    allowed_subquery_selects: set[int] = set()
+    _where = arg("where")
+    if _where is not None:
+        for in_node in _where.find_all(exp.In):
+            q = in_node.args.get("query")
+            if q is None:
+                continue
+            inner = q.this if isinstance(q, exp.Subquery) else q
+            if isinstance(inner, exp.Select):
+                for s in inner.find_all(exp.Select):
+                    allowed_subquery_selects.add(id(s))
+    if any(s is not stmt and id(s) not in allowed_subquery_selects
+           for s in stmt.find_all(exp.Select)):
+        raise ValueError(
+            "Subqueries are not supported in V1 except `col IN (SELECT ...)` "
+            "in WHERE (scalar subqueries, EXISTS, and derived tables are not "
+            "supported)."
+        )
     # ORDER BY is ignored: equivalence is checked under bag semantics.
 
     # ── FROM table ───────────────────────────────────────────────────────────
@@ -819,8 +887,12 @@ def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
     from_alias = from_table_node.alias or from_table
 
     # ── JOINs (V1: max one join) ─────────────────────────────────────────────
+    # Use the direct `joins` arg, NOT find_all(exp.Join): find_all descends into
+    # a WHERE `IN (SELECT ... JOIN ...)` body and would attribute the subquery's
+    # joins to this query. The subquery body's own joins are read when it is
+    # parsed recursively.
     joins: list[ParsedJoin] = []
-    for join_node in stmt.find_all(exp.Join):
+    for join_node in (stmt.args.get("joins") or []):
         tbl = join_node.this
         if not isinstance(tbl, exp.Table):
             raise ValueError("JOIN must reference a plain table in V1.")
@@ -1042,6 +1114,20 @@ def encode_query(
                 "them uniquely so the reading query can reference each.")
         cte_constraints.extend(cte_qf.extra_constraints)
         cte_regs[cte_name] = db.register_cte_relation(cte_name, cte_qf)
+
+    # ── Materialise WHERE `col IN (SELECT ...)` bodies (E⃗ ∈ Q, Fig. 4) ────────
+    # Encode each subquery body once (not per bag row) against the shared db, so
+    # _pred_tf can build the membership disjunction over its output tuples. The
+    # body is encoded via plain encode_query, so it cannot see this query's
+    # cte_regs — a subquery reading an outer CTE name fails closed ("not found").
+    # A correlated body (outer-alias reference) fails closed inside its own
+    # _resolve_references. Result columns are NOT registered as a pseudo-table:
+    # membership reads the tuples directly, and the witness builder never sees them.
+    for cond in _iter_pred_leaves(parsed.where_conditions):
+        if cond.subquery is not None:
+            sq = encode_query(cond.subquery, db, schema)
+            cte_constraints.extend(sq.extra_constraints)
+            cond.subquery_qf = sq
 
     def map_name(tname: str) -> str:
         # A FROM/JOIN name that is a CTE resolves to its registration name.
@@ -1635,6 +1721,35 @@ def _pred_tf(
         both_nn = And(Not(is_null), Not(r_is_null))
         rel = _cmp(cond.op, val, r_val)
         return (And(both_nn, rel), And(both_nn, Not(rel)))
+
+    # ── Membership: col IN (SELECT c ...) — the paper's E⃗ ∈ Q (Fig. 4) ───────
+    # Three-valued semantics over the (once-materialised) subquery output bag:
+    #   is_true  = ∨_i (present_i ∧ ¬xn ∧ ¬rn_i ∧ xv = rv_i)
+    #   is_false = ∧_i (¬present_i ∨ (¬xn ∧ ¬rn_i ∧ xv ≠ rv_i))
+    # This yields NULL (neither half) when xv is NULL against a non-empty body,
+    # and gets the NOT IN NULL trap right for free: a NULL body cell blocks
+    # is_false, so ¬(IN) (the NOT swap in _eval_tf) can never become TRUE. An
+    # empty body → is_false is vacuously TRUE, so IN is FALSE / NOT IN is TRUE.
+    if cond.op == "in_subquery":
+        qf = cond.subquery_qf
+        if qf is None:
+            raise ValueError("IN (SELECT ...) body was not materialised.")
+        lhs_type = type_of(cond.table_alias, cond.col)
+        body_type = qf.col_types.get(qf.col_aliases[0], "INTEGER")
+        # TEXT/TIMESTAMP are globally interned to opaque ints; equality is only
+        # sound against another interned string column, never a plain number.
+        if (lhs_type in ("TEXT", "TIMESTAMP")) != (body_type in ("TEXT", "TIMESTAMP")):
+            raise ValueError(
+                f"IN (SELECT ...) compares column '{cond.col}' ({lhs_type}) to a "
+                f"subquery column of type {body_type}; the types are incompatible."
+            )
+        ts, fs = [], []
+        for tup in qf.output:
+            rn, rv = tup.cols[0].is_null, tup.cols[0].value
+            ts.append(And(tup.present, Not(is_null), Not(rn), val == rv))
+            fs.append(Or(Not(tup.present), And(Not(is_null), Not(rn), val != rv)))
+        return (Or(ts) if ts else BoolVal(False),
+                And(fs) if fs else BoolVal(True))
 
     if cond.value is None:
         raise ValueError(f"Unsupported predicate on column '{cond.col}'.")

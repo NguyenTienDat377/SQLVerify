@@ -187,11 +187,143 @@ def test_or_with_is_null_keeps_null_rows():
     )
 
 
-def test_in_subquery_still_rejected():
-    # The subquery membership form (paper's E⃗ ∈ Q semi-join) is not yet built.
+# ── IN (SELECT ...) membership — the paper's E⃗ ∈ Q semi-join (Fig. 4) ────────
+# Uncorrelated, single-column body, WHERE only. Bodies materialised once and
+# encoded as a three-valued membership disjunction; NOT IN = NOT(IN) via Kleene.
+
+def test_in_subquery_self_equivalent():
     q = ("SELECT account_id FROM accounts WHERE account_id IN "
-         "(SELECT account_id FROM transactions)")
-    _check(q, q, "error", msg_contains="subquer")
+         "(SELECT amount FROM transactions)")
+    _check(q, q, "equivalent")
+
+
+def test_in_subquery_body_notnull_filter_equivalent():
+    # WHERE keeps a row iff the predicate is TRUE, so a NULL body cell and a
+    # missing body cell are indistinguishable for plain IN — filtering the
+    # body's NULLs out changes nothing.
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT amount FROM transactions)",
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT amount FROM transactions WHERE amount IS NOT NULL)",
+        "equivalent",
+    )
+
+
+def test_not_in_null_trap_divergent():
+    # The classic NOT IN NULL trap: a single NULL in the body makes NOT IN
+    # never-TRUE, so removing the body's NULLs is NOT equivalence-preserving.
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id NOT IN "
+        "(SELECT amount FROM transactions)",
+        "SELECT account_id FROM accounts WHERE account_id NOT IN "
+        "(SELECT amount FROM transactions WHERE amount IS NOT NULL)",
+        "divergent",
+    )
+
+
+def test_in_subquery_same_table_pk_membership_equivalent():
+    # account_id IN (SELECT account_id FROM accounts) holds for every present
+    # row (PK is non-NULL), so the filter is a no-op — exercises shared-base-
+    # table soundness (the body reads the same symbolic rows as the outer query).
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT account_id FROM accounts)",
+        "SELECT account_id FROM accounts",
+        "equivalent",
+    )
+
+
+def test_in_subquery_vs_constant_divergent():
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT amount FROM transactions WHERE dept = 1)",
+        "SELECT account_id FROM accounts WHERE account_id = 5",
+        "divergent",
+    )
+
+
+def test_in_subquery_aggregating_body_self_equivalent():
+    q = ("SELECT account_id FROM accounts WHERE account_id IN "
+         "(SELECT SUM(amount) FROM transactions GROUP BY dept)")
+    _check(q, q, "equivalent")
+
+
+def test_in_subquery_aggregating_body_vs_flat_divergent():
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT SUM(amount) FROM transactions GROUP BY dept)",
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT amount FROM transactions)",
+        "divergent",
+    )
+
+
+def test_scalar_subquery_rejected():
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id = "
+        "(SELECT amount FROM transactions)",
+        "SELECT account_id FROM accounts WHERE account_id = 5",
+        "error", msg_contains="subquer",
+    )
+
+
+def test_in_subquery_multi_column_body_rejected():
+    _check(
+        "SELECT account_id FROM accounts WHERE account_id IN "
+        "(SELECT amount, dept FROM transactions)",
+        "SELECT account_id FROM accounts",
+        "error", msg_contains="exactly one column",
+    )
+
+
+def test_in_subquery_tuple_lhs_rejected():
+    _check(
+        "SELECT account_id FROM accounts WHERE (account_id, balance) IN "
+        "(SELECT account_id, amount FROM transactions)",
+        "SELECT account_id FROM accounts",
+        "error", msg_contains="single-column",
+    )
+
+
+def test_correlated_subquery_rejected():
+    # An outer-alias reference inside the body is correlated — fails closed when
+    # the body is encoded (its alias_map has only the body's own tables).
+    _check(
+        "SELECT account_id FROM accounts a WHERE a.account_id IN "
+        "(SELECT amount FROM transactions t WHERE t.amount = a.balance)",
+        "SELECT account_id FROM accounts WHERE account_id = 5",
+        "error", msg_contains="alias",
+    )
+
+
+def test_exists_subquery_rejected():
+    _check(
+        "SELECT account_id FROM accounts WHERE EXISTS "
+        "(SELECT tx_id FROM transactions)",
+        "SELECT account_id FROM accounts WHERE account_id = 5",
+        "error", msg_contains="subquer",
+    )
+
+
+def test_in_subquery_in_having_rejected():
+    _check(
+        "SELECT dept FROM transactions GROUP BY dept HAVING dept IN "
+        "(SELECT account_id FROM accounts)",
+        "SELECT dept FROM transactions GROUP BY dept",
+        "error", msg_contains="subquer",
+    )
+
+
+def test_in_subquery_type_mismatch_rejected():
+    # LHS is TEXT (interned), body column is INTEGER — symbolic equality across
+    # the two would be unsound, so it fails closed.
+    _check(
+        "SELECT account_id FROM accounts WHERE status IN "
+        "(SELECT amount FROM transactions)",
+        "SELECT account_id FROM accounts",
+        "error", msg_contains="incompatible",
+    )
 
 
 # ── Non-recursive CTE inlining (paper's With(Q̃,R⃗,Q); we flatten, not materialize) ─

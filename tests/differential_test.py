@@ -124,19 +124,22 @@ def render_ddl(tables: list[GenTable]) -> str:
 
 @dataclass
 class Pred:
-    kind: str                       # 'cmp_lit' | 'cmp_col' | 'null' | 'in' | 'or' | 'not'
-    lhs: Optional[tuple[str, str]] = None   # (alias, col) for atoms / 'in'
+    kind: str                       # 'cmp_lit'|'cmp_col'|'null'|'in'|'in_sub'|'or'|'not'
+    lhs: Optional[tuple[str, str]] = None   # (alias, col) for atoms / 'in' / 'in_sub'
     op: str = "="                   # = <> > >= < <=  (or IS [NOT] NULL / IN / NOT IN)
     lit: object = None              # int or str for cmp_lit
     rhs: Optional[tuple[str, str]] = None   # for cmp_col
     lits: Optional[list] = None     # int literal list for 'in' / 'not in'
     children: Optional[list] = None  # sub-Preds for 'or' (≥2) / 'not' (exactly 1)
+    sub_sql: Optional[str] = None   # rendered uncorrelated body for 'in_sub'
 
     def render(self) -> str:
         if self.kind == "or":
             return "(" + " OR ".join(c.render() for c in self.children) + ")"
         if self.kind == "not":
             return "NOT (" + self.children[0].render() + ")"
+        if self.kind == "in_sub":
+            return f"{self.lhs[0]}.{self.lhs[1]} {self.op} ({self.sub_sql})"
         if self.kind == "in":
             vals = ", ".join(str(v) for v in self.lits)
             return f"{self.lhs[0]}.{self.lhs[1]} {self.op} ({vals})"
@@ -247,24 +250,58 @@ def gen_atom(rng: random.Random, cols) -> Pred:
                 rhs=rng.choice(num_cols))
 
 
-def gen_pred(rng: random.Random, cols) -> Pred:
+def gen_in_subquery(rng: random.Random, cols, tables: list[GenTable]) -> Optional[Pred]:
+    """`col IN/NOT IN (SELECT c FROM T sub [WHERE …] | SELECT SUM(c) … [GROUP BY …])`.
+
+    Uncorrelated: the body reads a real table under its own alias `sub` (never an
+    outer alias), so it stays a constant relation w.r.t. the outer row. The body
+    column is INTEGER (matching the outer LHS type) and preferentially NULLABLE,
+    so NOT IN's NULL trap gets attacked against the SQLite oracle."""
+    num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
+    if not num_cols:
+        return None
+    lhs = rng.choice(num_cols)
+    op = rng.choice(["IN", "NOT IN"])
+    tbl = rng.choice(tables)
+    tbl_ints = [c for c in tbl.columns if c.ctype == "INTEGER"]
+    nullable_ints = [c for c in tbl_ints if c.nullable]
+    scol = (rng.choice(nullable_ints)
+            if nullable_ints and rng.random() < 0.7 else rng.choice(tbl_ints))
+    if rng.random() < 0.25:
+        body = f"SELECT SUM(sub.{scol.name}) FROM {tbl.name} sub"
+        if rng.random() < 0.5:
+            body += f" GROUP BY sub.{rng.choice(tbl_ints).name}"
+    else:
+        body = f"SELECT sub.{scol.name} FROM {tbl.name} sub"
+        if rng.random() < 0.5:
+            wcol = rng.choice(tbl_ints)
+            wop = rng.choice(["=", "<>", ">", ">=", "<", "<="])
+            body += f" WHERE sub.{wcol.name} {wop} {rng.randint(LIT_LO, LIT_HI)}"
+    return Pred("in_sub", lhs=lhs, op=op, sub_sql=body)
+
+
+def gen_pred(rng: random.Random, cols, tables: list[GenTable]) -> Pred:
     """A WHERE conjunct: usually an atom, but sometimes an OR-group, an
-    IN / NOT IN over an integer list, or a NOT-wrapped atom — so the fuzzer
-    attacks the three-valued OR/IN/NOT encoding against the SQLite oracle."""
+    IN / NOT IN over an integer list or a subquery, or a NOT-wrapped atom — so the
+    fuzzer attacks the three-valued OR/IN/NOT and E⃗∈Q encodings vs the SQLite oracle."""
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
     roll = rng.random()
-    if roll < 0.14 and num_cols:
+    if roll < 0.12 and num_cols:
+        sub = gen_in_subquery(rng, cols, tables)
+        if sub is not None:
+            return sub
+    if roll < 0.24 and num_cols:
         # col IN (v1, v2[, v3]) / NOT IN — integer literals only (a NULL in the
         # list is rejected fail-closed by the encoder, so we never generate one).
         lits = [rng.randint(LIT_LO, LIT_HI)
                 for _ in range(rng.randint(2, 3))]
         return Pred("in", rng.choice(num_cols),
                     rng.choice(["IN", "NOT IN"]), lits=lits)
-    if roll < 0.28:
+    if roll < 0.38:
         # (atom OR atom) — occasionally a 3-way disjunction.
         k = rng.choice([2, 2, 3])
         return Pred("or", children=[gen_atom(rng, cols) for _ in range(k)])
-    if roll < 0.35:
+    if roll < 0.45:
         # NOT (atom) — exercises the ¬φ tree node and its three-valued swap.
         return Pred("not", children=[gen_atom(rng, cols)])
     return gen_atom(rng, cols)
@@ -310,7 +347,7 @@ def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
             second.alias = "o2"
             select.append(second)
 
-    where = [gen_pred(rng, cols) for _ in range(rng.choice([0, 0, 1, 1, 2]))]
+    where = [gen_pred(rng, cols, tables) for _ in range(rng.choice([0, 0, 1, 1, 2]))]
     return GenQuery(join_type, select, where, group_by, having)
 
 
@@ -373,7 +410,7 @@ def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[Gen
             p.op = "IS NOT NULL" if p.op == "IS NULL" else "IS NULL"
             return m, choice
         if choice == "add_pred":
-            m.where.append(gen_pred(rng, cols))
+            m.where.append(gen_pred(rng, cols, tables))
             return m, choice
         if choice == "swap_join":
             new = rng.choice([t for t in ("INNER", "LEFT", "RIGHT")
