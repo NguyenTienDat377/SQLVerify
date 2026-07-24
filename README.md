@@ -183,7 +183,7 @@ CREATE TABLE accounts (
 
 ### 2. Encode Queries as Z3 Formulas
 
-Each query becomes a symbolic formula over a bounded database (`bound=3` rows per table). NULLs are modeled as a `(is_null, value)` pair under three-valued logic. The encoder handles `SELECT`, `WHERE`/`HAVING`, INNER/LEFT/RIGHT `JOIN`, `GROUP BY`, and aggregates.
+Each query becomes a symbolic formula over a bounded database (`bound=3` rows per table). NULLs are modeled as a `(is_null, value)` pair under three-valued logic. The encoder handles `SELECT`, `WHERE`/`HAVING`, INNER/LEFT/RIGHT/FULL `JOIN`, `GROUP BY`, and aggregates.
 
 ### 3. Check Equivalence (bag semantics)
 
@@ -202,8 +202,8 @@ On user request — or always, for the CI endpoint — the counterexample is pas
 
 Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored. The subset is deliberately wide and widening over time.
 
-- **Joins** — any number of INNER joins per query, OR exactly one LEFT/RIGHT join. An outer join cannot be combined with another join. No FULL OUTER, CROSS, or self-joins. Each `JOIN ON` must be a single column equality.
-- **NULLs are modeled** — three-valued logic per the [VeriEQL paper](docs/references/veriEQL-2024.pdf): `IS [NOT] NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT JOIN null-extension are all encoded. NOT NULL / PK columns are forced non-NULL; FK columns may be NULL.
+- **Joins** — any number of INNER joins per query, OR exactly one LEFT/RIGHT/FULL join. An outer join cannot be combined with another join. FULL OUTER is the union of the LEFT and RIGHT null-extensions; GROUP BY with a FULL/RIGHT join needs non-nullable FROM-table keys. No CROSS or self-joins. Each `JOIN ON` must be a single column equality.
+- **NULLs are modeled** — three-valued logic per the [VeriEQL paper](docs/references/veriEQL-2024.pdf): `IS [NOT] NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT/FULL JOIN null-extension are all encoded. NOT NULL / PK columns are forced non-NULL; FK columns may be NULL.
 - **Predicates** — AND-chains of comparisons and `IS [NOT] NULL` only. No `OR` / `IN` / `BETWEEN` / `LIKE`. Column-vs-literal and column-vs-column both supported. Boolean literals (`active = TRUE`) rejected.
 - **No** CTEs (`WITH`), window functions, subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`.
 - **Text/Timestamp equality** is symbolic (interned to integer) — ordering comparisons (`>`, `<`) on text/timestamp are rejected.

@@ -52,3 +52,5 @@ logs/
 
 # uvicorn / gunicorn
 *.pid
+# CocoIndex Code (ccc)
+/.cocoindex_code/

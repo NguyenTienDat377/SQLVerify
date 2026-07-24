@@ -505,10 +505,171 @@ def test_self_join_rejected():
     _check(q, q, "error", msg_contains="Self-join")
 
 
-def test_full_outer_join_rejected():
-    q = ("SELECT a.account_id FROM accounts a FULL OUTER JOIN transactions t "
-         "ON a.account_id = t.account_id")
-    _check(q, q, "error", msg_contains="FULL OUTER")
+# ── FULL OUTER JOIN ──────────────────────────────────────────────────────────
+# FULL = matched pairs ∪ LEFT's unmatched-FROM rows ∪ RIGHT's unmatched-join
+# rows. Both sides are null-extended; ON-vs-WHERE is load-bearing on both.
+
+def test_full_outer_join_self_equivalent():
+    # `FULL JOIN` and `FULL OUTER JOIN` parse identically (side == "FULL").
+    _check(
+        "SELECT a.account_id, t.tx_id FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "SELECT a.account_id, t.tx_id FROM accounts a FULL JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "equivalent",
+    )
+
+
+def test_full_outer_join_vs_left_divergent():
+    # FULL keeps unmatched transactions (right rows); LEFT drops them.
+    _check(
+        "SELECT a.account_id, t.tx_id FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "SELECT a.account_id, t.tx_id FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "divergent",
+    )
+
+
+def test_full_outer_join_vs_right_divergent():
+    # Symmetrically, FULL keeps unmatched accounts (left rows); RIGHT drops them.
+    _check(
+        "SELECT a.account_id, t.tx_id FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "SELECT a.account_id, t.tx_id FROM accounts a RIGHT JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "divergent",
+    )
+
+
+def test_full_outer_join_vs_inner_divergent():
+    _check(
+        "SELECT a.account_id, t.tx_id FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "SELECT a.account_id, t.tx_id FROM accounts a INNER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "divergent",
+    )
+
+
+def test_full_outer_where_on_left_equals_left_join():
+    # A WHERE filter on a FROM-table column NULLs out the right-extended rows
+    # (their FROM cells are NULL), collapsing FULL to LEFT.
+    _check(
+        "SELECT a.balance AS b, t.amount AS m FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id WHERE a.balance > 0",
+        "SELECT a.balance AS b, t.amount AS m FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id WHERE a.balance > 0",
+        "equivalent",
+    )
+
+
+def test_full_outer_where_on_right_equals_right_join():
+    # Symmetric: a WHERE filter on a join-table column collapses FULL to RIGHT.
+    _check(
+        "SELECT a.balance AS b, t.amount AS m FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id WHERE t.amount > 0",
+        "SELECT a.balance AS b, t.amount AS m FROM accounts a RIGHT JOIN "
+        "transactions t ON a.account_id = t.account_id WHERE t.amount > 0",
+        "equivalent",
+    )
+
+
+def test_full_outer_anti_join_on_left_equals_right():
+    # WHERE a.account_id IS NULL keeps only the null-extended right rows
+    # (unmatched transactions) — the same set RIGHT JOIN + that filter keeps.
+    _check(
+        "SELECT t.tx_id FROM accounts a FULL OUTER JOIN transactions t "
+        "ON a.account_id = t.account_id WHERE a.account_id IS NULL",
+        "SELECT t.tx_id FROM accounts a RIGHT JOIN transactions t "
+        "ON a.account_id = t.account_id WHERE a.account_id IS NULL",
+        "equivalent",
+    )
+
+
+def test_full_outer_count_star_vs_left_divergent():
+    _check(
+        "SELECT COUNT(*) AS c FROM accounts a FULL OUTER JOIN transactions t "
+        "ON a.account_id = t.account_id",
+        "SELECT COUNT(*) AS c FROM accounts a LEFT JOIN transactions t "
+        "ON a.account_id = t.account_id",
+        "divergent",
+    )
+
+
+def test_full_outer_count_col_vs_left_divergent():
+    # COUNT(t.amount) still counts the unmatched right rows' amounts, which
+    # LEFT never produces — so the two counts differ.
+    _check(
+        "SELECT COUNT(t.amount) AS c FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "SELECT COUNT(t.amount) AS c FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "divergent",
+    )
+
+
+def test_full_outer_group_by_self_equivalent():
+    # GROUP BY on a non-nullable FROM-table key (accounts.status is NOT NULL):
+    # the null-extended right rows form the single extra NULL-key group.
+    q = ("SELECT a.status AS s, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+         "transactions t ON a.account_id = t.account_id GROUP BY a.status")
+    _check(q, q, "equivalent")
+
+
+def test_full_outer_group_by_vs_left_divergent():
+    # FULL's extra NULL-key group (from unmatched transactions) has no
+    # counterpart under LEFT.
+    _check(
+        "SELECT a.status AS s, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY a.status",
+        "SELECT a.status AS s, COUNT(*) AS c FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY a.status",
+        "divergent",
+    )
+
+
+def test_full_outer_group_by_nullable_key_rejected():
+    # accounts.balance is nullable; a matched row could carry a NULL key and
+    # would have to merge with the extra NULL group — not modelled, fail closed.
+    q = ("SELECT a.balance AS b, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+         "transactions t ON a.account_id = t.account_id GROUP BY a.balance")
+    _check(q, q, "error", msg_contains="non-nullable")
+
+
+def test_full_outer_group_by_joined_table_key_rejected():
+    q = ("SELECT t.dept AS d, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+         "transactions t ON a.account_id = t.account_id GROUP BY t.dept")
+    _check(q, q, "error", msg_contains="GROUP BY only on columns of the FROM table")
+
+
+def test_full_outer_inside_cte_body_equals_flat():
+    # A FULL join is a valid CTE body (materialized); the reader sees a plain
+    # relation, so wrapping it changes nothing.
+    _check(
+        "WITH m AS (SELECT a.account_id AS i, t.tx_id AS x FROM accounts a "
+        "FULL OUTER JOIN transactions t ON a.account_id = t.account_id) "
+        "SELECT m.i, m.x FROM m",
+        "SELECT a.account_id AS i, t.tx_id AS x FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id",
+        "equivalent",
+    )
+
+
+def test_full_outer_join_on_cte_relation_rejected():
+    # A materialized CTE relation on an outer-join side has no null-extension
+    # for its cells — fail closed (same guard as LEFT/RIGHT).
+    q = ("WITH m AS (SELECT account_id AS i FROM accounts) "
+         "SELECT m.i, t.tx_id FROM m FULL OUTER JOIN transactions t "
+         "ON m.i = t.account_id")
+    _check(q, q, "error", msg_contains="CTE relation combined with an outer")
+
+
+def test_full_outer_plus_inner_join_rejected():
+    q = ("SELECT a.account_id FROM accounts a "
+         "FULL OUTER JOIN transactions t ON a.account_id = t.account_id "
+         "JOIN departments d ON t.dept = d.dept_id")
+    _check(q, q, "error", msg_contains="Outer joins are supported only as a single join")
 
 
 def test_count_distinct_rejected():

@@ -23,8 +23,8 @@ dropped predicate or SELECT expression can turn a real divergence into a false
 "equivalent" verdict, which is the one failure mode this tool cannot have.
 
 Out of scope (all rejected with ValueError):
-  FULL OUTER / CROSS joins, self-joins, outer joins combined with another join,
-  IN (SELECT ...) subquery membership, BETWEEN / LIKE predicates, window
+  CROSS joins, self-joins, outer joins combined with another join,
+  BETWEEN / LIKE predicates, window
   functions, CTEs, subqueries, UNION, DISTINCT, LIMIT/OFFSET, string/timestamp
   ordering comparisons.
   (ORDER BY is accepted but ignored — equivalence is checked under bag
@@ -138,7 +138,7 @@ class ParsedSelectExpr:
 class ParsedJoin:
     table_name: str
     alias: str
-    join_type: str                # 'INNER' | 'LEFT' | 'RIGHT'
+    join_type: str                # 'INNER' | 'LEFT' | 'RIGHT' | 'FULL'
     on_left_alias: Optional[str]  # alias on left side of ON condition
     on_left_col: str
     on_right_alias: Optional[str] # alias on right side of ON condition
@@ -905,7 +905,7 @@ def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
         elif side == "RIGHT":
             join_type = "RIGHT"
         elif side == "FULL":
-            raise ValueError("FULL OUTER JOIN is not supported in V1.")
+            join_type = "FULL"   # FULL [OUTER] JOIN — both sides null-extended
         elif kind == "CROSS":
             raise ValueError("CROSS JOIN is not supported in V1.")
         else:
@@ -1158,11 +1158,12 @@ def encode_query(
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
     # INNER-only joins (including no join at all) use the N-table join-bag path
-    # below. A single LEFT/RIGHT join uses the dedicated outer-join path (its
-    # null-extension and ON-vs-WHERE handling are load-bearing — left unchanged).
+    # below. A single LEFT/RIGHT/FULL join uses the dedicated outer-join path
+    # (its null-extension and ON-vs-WHERE handling are load-bearing). FULL is the
+    # union of the LEFT and RIGHT null-extensions over the same matched pairs.
     # An outer join combined with any other join is rejected: multi-table joins
     # must be INNER in this version.
-    outer_joins = [j for j in parsed.joins if j.join_type in ("LEFT", "RIGHT")]
+    outer_joins = [j for j in parsed.joins if j.join_type in ("LEFT", "RIGHT", "FULL")]
     inner_only = not outer_joins
     if outer_joins and len(parsed.joins) > 1:
         raise ValueError(
@@ -1175,7 +1176,7 @@ def encode_query(
     # null-extension handling that this path doesn't provide — fail-closed.
     if outer_joins and any(v in db.cte_col_types for v in alias_map.values()):
         raise ValueError(
-            "A CTE relation combined with an outer (LEFT/RIGHT) join is not "
+            "A CTE relation combined with an outer (LEFT/RIGHT/FULL) join is not "
             "supported yet — use a CTE in FROM or INNER-join positions.")
 
     # Two-table outer-join context (only meaningful on the single-outer path).
@@ -1185,6 +1186,12 @@ def encode_query(
     join_tname = resolve(join_alias) if has_join else None
     is_left = has_join and join.join_type == "LEFT"
     is_right = has_join and join.join_type == "RIGHT"
+    is_full = has_join and join.join_type == "FULL"
+    # FULL OUTER = matched pairs ∪ LEFT null-extension ∪ RIGHT null-extension.
+    # left_ext emits null-extended rows for unmatched FROM rows (LEFT + FULL);
+    # right_ext emits them for unmatched join rows (RIGHT + FULL).
+    left_ext = is_left or is_full
+    right_ext = is_right or is_full
 
     # ── Cell accessors: map (alias, col) → (is_null, value) per row context ──
     def cellfn_single(i: int):
@@ -1492,7 +1499,7 @@ def encode_query(
                 raise ValueError(
                     "V1 supports GROUP BY only on columns of the FROM table; "
                     f"'{galias}.{gcol}' belongs to the joined table. "
-                    "Swap the join direction to group by that table's columns."
+                    "Put that table in the FROM position to group by its columns."
                 )
         group_key_cols = {gcol for (_, gcol) in parsed.group_by}
         for sel in parsed.select_exprs:
@@ -1511,7 +1518,7 @@ def encode_query(
                         f"Non-aggregated SELECT column '{sel.col_name}' must "
                         "appear in GROUP BY."
                     )
-        if is_right:
+        if right_ext:
             # Null-extended right rows have NULL FROM-side keys and form one
             # extra group. If a key column were nullable, matched rows could
             # also carry NULL keys and would have to merge with that group —
@@ -1521,7 +1528,7 @@ def encode_query(
                 col_obj = from_table_obj.get_column(gcol) if from_table_obj else None
                 if col_obj is None or col_obj.nullable:
                     raise ValueError(
-                        "RIGHT JOIN with GROUP BY requires non-nullable "
+                        "RIGHT or FULL JOIN with GROUP BY requires non-nullable "
                         f"group key columns in V1 ('{gcol}' is nullable)."
                     )
 
@@ -1539,7 +1546,7 @@ def encode_query(
             """FROM row i contributes at least one surviving post-WHERE row."""
             if has_join:
                 terms = [pair_present(i, j) for j in range(bound)]
-                if is_left:
+                if left_ext:
                     terms.append(nullext_left_present(i))
                 return Or(terms)
             return single_present(i)
@@ -1556,7 +1563,7 @@ def encode_query(
                 if has_join:
                     for j in range(bound):
                         contribs.append((And(keq, pair_present(i, j)), cellfn_pair(i, j)))
-                    if is_left:
+                    if left_ext:
                         contribs.append((And(keq, nullext_left_present(i)), cellfn_nullext_left(i)))
                 else:
                     contribs.append((And(keq, single_present(i)), cellfn_single(i)))
@@ -1572,7 +1579,7 @@ def encode_query(
                 if parsed.having_conditions else base_present
             output.append(OutputTuple(present, cols))
 
-        if is_right:
+        if right_ext:
             # All null-extended right rows share the single all-NULL FROM-side
             # key, so they form exactly one extra candidate group.
             contribs_r = [(nullext_right_present(j), cellfn_nullext_right(j))
@@ -1603,11 +1610,11 @@ def encode_query(
             if has_join:
                 for j in range(bound):
                     contribs.append((pair_present(i, j), cellfn_pair(i, j)))
-                if is_left:
+                if left_ext:
                     contribs.append((nullext_left_present(i), cellfn_nullext_left(i)))
             else:
                 contribs.append((single_present(i), cellfn_single(i)))
-        if is_right:
+        if right_ext:
             for j in range(bound):
                 contribs.append((nullext_right_present(j), cellfn_nullext_right(j)))
 
@@ -1629,10 +1636,10 @@ def encode_query(
             for j in range(bound):
                 cols = [proj(sel, cellfn_pair(i, j)) for sel in parsed.select_exprs]
                 output.append(OutputTuple(pair_present(i, j), cols))
-            if is_left:
+            if left_ext:
                 cols = [proj(sel, cellfn_nullext_left(i)) for sel in parsed.select_exprs]
                 output.append(OutputTuple(nullext_left_present(i), cols))
-        if is_right:
+        if right_ext:
             for j in range(bound):
                 cols = [proj(sel, cellfn_nullext_right(j)) for sel in parsed.select_exprs]
                 output.append(OutputTuple(nullext_right_present(j), cols))
