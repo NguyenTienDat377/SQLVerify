@@ -202,7 +202,7 @@ On user request — or always, for the CI endpoint — the counterexample is pas
 
 Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored. The subset is deliberately wide and widening over time.
 
-- **Joins** — any number of INNER joins per query, OR exactly one LEFT/RIGHT/FULL join. An outer join cannot be combined with another join. FULL OUTER is the union of the LEFT and RIGHT null-extensions; GROUP BY with a FULL/RIGHT join needs non-nullable FROM-table keys. No CROSS or self-joins. Each `JOIN ON` must be a single column equality.
+- **Joins** — any left-deep chain mixing INNER/LEFT/RIGHT/FULL joins, each with a single column-equality `ON`. A LEFT/FULL step null-extends the table it joins; a RIGHT/FULL step null-extends the whole accumulated left side (every table joined so far), matching the paper's own binary-join semantics generalized to a chain. GROUP BY may key on any table in the chain, including a null-extended side. No CROSS or self-joins.
 - **NULLs are modeled** — three-valued logic per the [VeriEQL paper](docs/references/veriEQL-2024.pdf): `IS [NOT] NULL`, `COUNT(col)` vs `COUNT(*)`, and LEFT/RIGHT/FULL JOIN null-extension are all encoded. NOT NULL / PK columns are forced non-NULL; FK columns may be NULL.
 - **Predicates** — AND-chains of comparisons and `IS [NOT] NULL` only. No `OR` / `IN` / `BETWEEN` / `LIKE`. Column-vs-literal and column-vs-column both supported. Boolean literals (`active = TRUE`) rejected.
 - **No** CTEs (`WITH`), window functions, subqueries, `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET`.

@@ -464,8 +464,23 @@ def _build_sqlite_db(counterexample_db: dict, schema: SchemaModel) -> sqlite3.Co
 
 
 def _rows_to_dicts(cursor: sqlite3.Cursor) -> list[dict]:
-    """Convert sqlite3.Row results to plain dicts."""
-    cols = [desc[0] for desc in cursor.description]
+    """Convert sqlite3.Row results to plain dicts.
+
+    Disambiguates duplicate column names (e.g. `SELECT a.id, b.id` with
+    neither side aliased — legal SQL, and common once queries join multiple
+    tables sharing a column name). `dict(zip(cols, row))` on its own would
+    silently drop every column but the last with the same name, which could
+    make two genuinely different result rows compare equal in
+    _witness_outputs_differ (a spurious "encoding bug" downgrade of a real
+    divergence) and would show the wrong output table in the UI.
+    """
+    seen: dict[str, int] = {}
+    cols = []
+    for desc in cursor.description:
+        name = desc[0]
+        n = seen.get(name, 0)
+        seen[name] = n + 1
+        cols.append(name if n == 0 else f"{name}_{n + 1}")
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 

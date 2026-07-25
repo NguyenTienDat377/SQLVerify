@@ -492,11 +492,19 @@ def test_group_by_joined_table_column_accepted():
     _check(q, q, "equivalent")
 
 
-def test_outer_join_plus_inner_join_rejected():
-    q = ("SELECT a.account_id FROM accounts a "
-         "LEFT JOIN transactions t ON a.account_id = t.account_id "
-         "JOIN departments d ON t.dept = d.dept_id")
-    _check(q, q, "error", msg_contains="Outer joins are supported only as a single join")
+def test_left_then_inner_join_chain_equals_all_inner():
+    # A LEFT-extended t row has t.dept NULL, so the trailing INNER join to d
+    # (ON t.dept = d.dept_id) can never match it — the null-extension never
+    # reaches the output either way, so the LEFT is invisible here.
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "LEFT JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "equivalent",
+    )
 
 
 def test_self_join_rejected():
@@ -629,18 +637,44 @@ def test_full_outer_group_by_vs_left_divergent():
     )
 
 
-def test_full_outer_group_by_nullable_key_rejected():
-    # accounts.balance is nullable; a matched row could carry a NULL key and
-    # would have to merge with the extra NULL group — not modelled, fail closed.
+def test_full_outer_group_by_nullable_key_self_equivalent():
+    # accounts.balance is nullable: a matched row's NULL key must merge with
+    # the extra all-NULL group from unmatched transactions. The generic bag
+    # GROUP BY (group_key_eq) is NULL-safe, so this is sound without the old
+    # non-nullable restriction from the two-table outer-join path.
     q = ("SELECT a.balance AS b, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
          "transactions t ON a.account_id = t.account_id GROUP BY a.balance")
-    _check(q, q, "error", msg_contains="non-nullable")
+    _check(q, q, "equivalent")
 
 
-def test_full_outer_group_by_joined_table_key_rejected():
+def test_full_outer_group_by_nullable_key_vs_left_divergent():
+    _check(
+        "SELECT a.balance AS b, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY a.balance",
+        "SELECT a.balance AS b, COUNT(*) AS c FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY a.balance",
+        "divergent",
+    )
+
+
+def test_full_outer_group_by_joined_table_key_self_equivalent():
+    # GROUP BY on the joined-table column (t.dept): no longer restricted to
+    # FROM-table keys now that the join fold's bag GROUP BY covers any table.
     q = ("SELECT t.dept AS d, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
          "transactions t ON a.account_id = t.account_id GROUP BY t.dept")
-    _check(q, q, "error", msg_contains="GROUP BY only on columns of the FROM table")
+    _check(q, q, "equivalent")
+
+
+def test_full_outer_group_by_joined_table_key_vs_left_divergent():
+    # FULL's null-extended (unmatched) transactions rows keep their real
+    # t.dept value and land in an ordinary group; LEFT never produces them.
+    _check(
+        "SELECT t.dept AS d, COUNT(*) AS c FROM accounts a FULL OUTER JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY t.dept",
+        "SELECT t.dept AS d, COUNT(*) AS c FROM accounts a LEFT JOIN "
+        "transactions t ON a.account_id = t.account_id GROUP BY t.dept",
+        "divergent",
+    )
 
 
 def test_full_outer_inside_cte_body_equals_flat():
@@ -665,11 +699,114 @@ def test_full_outer_join_on_cte_relation_rejected():
     _check(q, q, "error", msg_contains="CTE relation combined with an outer")
 
 
-def test_full_outer_plus_inner_join_rejected():
+def test_full_outer_plus_inner_join_keeps_right_extension_divergent():
+    # FULL's right-extension (unmatched transactions, a-side NULL) survives
+    # into the trailing INNER join to d as long as ON references t, not a —
+    # so it produces extra output rows the all-INNER chain never does.
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "FULL OUTER JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "divergent",
+    )
+
+
+# ── Outer-join CHAINS (Phase B: left-deep N-table fold) ──────────────────────
+# The two-table single-outer-join path is gone; every query — any mix of
+# INNER/LEFT/RIGHT/FULL — now folds through the same build_join_bag.
+
+def test_left_left_chain_vs_inner_inner_chain_divergent():
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "LEFT JOIN transactions t ON a.account_id = t.account_id "
+        "LEFT JOIN departments d ON t.dept = d.dept_id",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "divergent",
+    )
+
+
+def test_anti_join_idiom_at_second_join_level_divergent():
+    # WHERE d.dept_id IS NULL keeps matched a-t pairs with no department
+    # match — the complement of what an INNER join to d would keep.
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "LEFT JOIN departments d ON t.dept = d.dept_id "
+        "WHERE d.dept_id IS NULL",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id",
+        "divergent",
+    )
+
+
+def test_where_on_last_table_collapses_left_left_chain_to_inner_inner():
+    # A WHERE filter on d cascades through both levels: if t is unmatched,
+    # d.dept reads as NULL too (t.dept is NULL-extended), so d never matches
+    # and its null-extension is itself killed by WHERE d.region = 'east'.
+    _check(
+        "SELECT a.account_id FROM accounts a "
+        "LEFT JOIN transactions t ON a.account_id = t.account_id "
+        "LEFT JOIN departments d ON t.dept = d.dept_id "
+        "WHERE d.region = 'east'",
+        "SELECT a.account_id FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "JOIN departments d ON t.dept = d.dept_id "
+        "WHERE d.region = 'east'",
+        "equivalent",
+    )
+
+
+def test_right_join_in_chain_nulls_every_accumulated_alias():
+    # A RIGHT/FULL join null-extends the WHOLE accumulated left relation, not
+    # just the immediately preceding table (VeriEQL Fig. 5's T_Null width is
+    # the whole left operand). So among the null-extended department rows,
+    # a.account_id IS NULL and t.tx_id IS NULL identify the exact same set.
+    _check(
+        "SELECT COUNT(*) AS c FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "RIGHT JOIN departments d ON t.dept = d.dept_id "
+        "WHERE a.account_id IS NULL",
+        "SELECT COUNT(*) AS c FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "RIGHT JOIN departments d ON t.dept = d.dept_id "
+        "WHERE t.tx_id IS NULL",
+        "equivalent",
+    )
+
+
+def test_full_join_in_chain_group_by_vs_left_divergent():
+    # A FULL join as the second link in a chain, combined with GROUP BY on
+    # the joined table's column (t.dept) — both the outer-chain and the
+    # GROUP BY-on-joined-column restrictions from the old two-table path are
+    # gone. FULL's extra unmatched-department group has no LEFT counterpart.
+    _check(
+        "SELECT t.dept AS d, COUNT(*) AS c FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "FULL OUTER JOIN departments d ON t.dept = d.dept_id "
+        "GROUP BY t.dept",
+        "SELECT t.dept AS d, COUNT(*) AS c FROM accounts a "
+        "JOIN transactions t ON a.account_id = t.account_id "
+        "LEFT JOIN departments d ON t.dept = d.dept_id "
+        "GROUP BY t.dept",
+        "divergent",
+    )
+
+
+def test_join_on_forward_reference_rejected():
+    # The ON for 't' references 'd', which isn't joined until the next step —
+    # not valid SQL (a FROM clause introduces tables left to right) and not
+    # something the left-deep fold can encode without silently reading a
+    # not-yet-joined alias as NULL. Fail closed.
     q = ("SELECT a.account_id FROM accounts a "
-         "FULL OUTER JOIN transactions t ON a.account_id = t.account_id "
+         "JOIN transactions t ON a.account_id = d.dept_id "
          "JOIN departments d ON t.dept = d.dept_id")
-    _check(q, q, "error", msg_contains="Outer joins are supported only as a single join")
+    _check(q, q, "error", msg_contains="not yet in scope")
 
 
 def test_count_distinct_rejected():
@@ -781,6 +918,28 @@ def test_divergent_witness_reproduces():
     assert result.query_v1_output != result.query_v2_output, (
         "witness outputs should differ"
     )
+
+
+def test_witness_replay_disambiguates_duplicate_output_column_names():
+    # SELECT t.account_id, a.account_id (unaliased, same name from two
+    # different tables) is legal SQL. _rows_to_dicts used to build the witness
+    # display via dict(zip(cols, row)), which silently dropped every column
+    # but the last sharing a name — collapsing two genuinely different output
+    # rows into the same tuple and making the soundness guardrail wrongly
+    # downgrade a real divergence to "error" (found by the differential
+    # fuzzer's chain generator, seed 2782). Both columns must now survive,
+    # disambiguated as account_id / account_id_2.
+    result = _check(
+        "SELECT t.account_id, a.account_id FROM accounts a "
+        "FULL OUTER JOIN transactions t ON a.account_id = t.account_id "
+        "RIGHT JOIN departments d ON t.dept = d.dept_id",
+        "SELECT t.account_id, a.account_id FROM accounts a "
+        "LEFT JOIN transactions t ON a.account_id = t.account_id "
+        "RIGHT JOIN departments d ON t.dept = d.dept_id",
+        "divergent",
+    )
+    assert result.query_v1_output and "account_id_2" in result.query_v1_output[0]
+    assert result.query_v2_output and "account_id_2" in result.query_v2_output[0]
 
 
 if __name__ == "__main__":

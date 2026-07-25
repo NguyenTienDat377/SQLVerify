@@ -190,10 +190,15 @@ class Having:
         return f"{a} {self.op} {self.lit}"
 
 
+_JOIN_KW = {"INNER": "INNER JOIN", "LEFT": "LEFT JOIN", "RIGHT": "RIGHT JOIN",
+            "FULL": "FULL OUTER JOIN"}
+
+
 @dataclass
 class GenQuery:
-    join_type: Optional[str]        # None | 'INNER' | 'LEFT' | 'RIGHT' | 'FULL'
-    select: list[SelectItem]
+    join_type: Optional[str]        # None | 'INNER' | 'LEFT' | 'RIGHT' | 'FULL' — t1 x ⋈ t2 y
+    join2_type: Optional[str]       # same domain, or None — t2 y ⋈ t3 z (chain's 2nd link;
+    select: list[SelectItem]        # only meaningful when join_type is not None)
     where: list[Pred]
     group_by: list[tuple[str, str]]
     having: Optional[Having]
@@ -201,13 +206,10 @@ class GenQuery:
     def render(self) -> str:
         sql = "SELECT " + ", ".join(s.render() for s in self.select)
         sql += " FROM t1 x"
-        if self.join_type == "INNER3":
-            sql += (" JOIN t2 y ON x.id = y.t1_id"
-                    " JOIN t3 z ON y.id = z.t2_id")
-        elif self.join_type:
-            kw = {"INNER": "INNER JOIN", "LEFT": "LEFT JOIN", "RIGHT": "RIGHT JOIN",
-                  "FULL": "FULL OUTER JOIN"}[self.join_type]
-            sql += f" {kw} t2 y ON x.id = y.t1_id"
+        if self.join_type:
+            sql += f" {_JOIN_KW[self.join_type]} t2 y ON x.id = y.t1_id"
+            if self.join2_type:
+                sql += f" {_JOIN_KW[self.join2_type]} t3 z ON y.id = z.t2_id"
         if self.where:
             sql += " WHERE " + " AND ".join(p.render() for p in self.where)
         if self.group_by:
@@ -217,7 +219,8 @@ class GenQuery:
         return sql
 
 
-def _query_cols(tables: list[GenTable], join_type: Optional[str]):
+def _query_cols(tables: list[GenTable], join_type: Optional[str],
+                join2_type: Optional[str] = None):
     """(alias, col, ctype, nullable) for every column visible to the query."""
     out = []
     for c in tables[0].columns:
@@ -225,9 +228,9 @@ def _query_cols(tables: list[GenTable], join_type: Optional[str]):
     if join_type is not None:
         for c in tables[1].columns:
             out.append(("y", c.name, c.ctype, c.nullable))
-    if join_type == "INNER3":
-        for c in tables[2].columns:
-            out.append(("z", c.name, c.ctype, c.nullable))
+        if join2_type is not None:
+            for c in tables[2].columns:
+                out.append(("z", c.name, c.ctype, c.nullable))
     return out
 
 
@@ -309,8 +312,12 @@ def gen_pred(rng: random.Random, cols, tables: list[GenTable]) -> Pred:
 
 
 def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
-    join_type = rng.choice([None, None, "INNER", "LEFT", "RIGHT", "FULL", "INNER3"])
-    cols = _query_cols(tables, join_type)
+    join_type = rng.choice([None, None, "INNER", "LEFT", "RIGHT", "FULL"])
+    # A left-deep 2-join chain (t1 x ⋈ t2 y ⋈ t3 z): any of the 4 join kinds at
+    # each level, independently — the unified join-bag fold handles any mix.
+    join2_type = (rng.choice(["INNER", "LEFT", "RIGHT", "FULL"])
+                  if join_type is not None and rng.random() < 0.5 else None)
+    cols = _query_cols(tables, join_type, join2_type)
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
 
     shape = rng.random()
@@ -322,16 +329,10 @@ def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
         select = [SelectItem("col", src=rng.choice([(a, n) for a, n, _, _ in cols]))
                   for _ in range(k)]
     elif shape < 0.85:
-        # GROUP BY key + one aggregate. INNER modes (incl. no join) may group by
-        # any visible column; the single-outer path keeps the V1 restriction of
-        # FROM-table keys, non-nullable under RIGHT/FULL JOIN (both null-extend
-        # the FROM side into one extra NULL-key group).
-        if join_type in (None, "INNER", "INNER3"):
-            key_pool = [(a, n) for a, n, _, _ in cols]
-        else:
-            key_pool = [("x", c.name) for c in tables[0].columns
-                        if join_type not in ("RIGHT", "FULL") or not c.nullable]
-        key = rng.choice(key_pool)
+        # GROUP BY key + one aggregate. The unified join-bag GROUP BY (any
+        # table, NULL-safe key equality) covers every join shape uniformly —
+        # no more FROM-table-only / non-nullable-under-RIGHT/FULL restriction.
+        key = rng.choice([(a, n) for a, n, _, _ in cols])
         group_by = [key]
         select = [SelectItem("col", src=key), _gen_agg(rng, num_cols)]
         if rng.random() < 0.4:
@@ -350,7 +351,7 @@ def gen_query(rng: random.Random, tables: list[GenTable]) -> GenQuery:
             select.append(second)
 
     where = [gen_pred(rng, cols, tables) for _ in range(rng.choice([0, 0, 1, 1, 2]))]
-    return GenQuery(join_type, select, where, group_by, having)
+    return GenQuery(join_type, join2_type, select, where, group_by, having)
 
 
 def _gen_agg(rng: random.Random, num_cols) -> SelectItem:
@@ -366,18 +367,41 @@ def _gen_agg(rng: random.Random, num_cols) -> SelectItem:
 _FLIP = {">": ">=", ">=": ">", "<": "<=", "<=": "<", "=": "<>", "<>": "="}
 
 
+def _query_refs_alias(q: GenQuery, alias: str) -> bool:
+    """Whether any select/where/group-by/having expression reads `alias` —
+    used to keep 'drop_join2' from orphaning a column reference."""
+    if any(s.src and s.src[0] == alias for s in q.select):
+        return True
+    if any(alias in _pred_aliases(p) for p in q.where):
+        return True
+    if any(a == alias for a, _ in q.group_by):
+        return True
+    if q.having and q.having.col and q.having.col[0] == alias:
+        return True
+    return False
+
+
 def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[GenQuery, str]:
     """Return (mutant, mutation_name). 'identity' leaves the query unchanged."""
     m = copy.deepcopy(q)
-    cols = _query_cols(tables, m.join_type)
+    cols = _query_cols(tables, m.join_type, m.join2_type)
     num_cols = [(a, n) for a, n, t, _ in cols if t == "INTEGER"]
 
     options = ["identity"]
     if m.where:
         options += ["flip_op", "shift_lit", "drop_pred", "flip_null"]
     options.append("add_pred")
-    if m.join_type in ("INNER", "LEFT", "RIGHT", "FULL"):
+    # The unified join-bag fold handles any INNER/LEFT/RIGHT/FULL mix at every
+    # chain level, so swapping a join's type (or growing/shrinking the chain)
+    # never needs the old GROUP BY fallback-to-INNER guard.
+    if m.join_type is not None:
         options.append("swap_join")
+        if m.join2_type is not None:
+            options.append("swap_join2")
+            if not _query_refs_alias(m, "z"):
+                options.append("drop_join2")
+        else:
+            options.append("add_join2")
     if any(s.kind in ("count_star", "count_col") for s in m.select):
         options.append("count_swap")
     if any(s.kind == "sum" for s in m.select):
@@ -415,19 +439,18 @@ def mutate(rng: random.Random, q: GenQuery, tables: list[GenTable]) -> tuple[Gen
             m.where.append(gen_pred(rng, cols, tables))
             return m, choice
         if choice == "swap_join":
-            new = rng.choice([t for t in ("INNER", "LEFT", "RIGHT", "FULL")
-                              if t != m.join_type])
-            if new in ("LEFT", "RIGHT", "FULL") and m.group_by:
-                # The single-outer path keeps the V1 GROUP BY restriction:
-                # keys must be FROM-table columns, non-nullable under RIGHT/FULL.
-                # An INNER query may group by a joined-table column (lifted), so
-                # fall back to INNER rather than emit an invalid outer query.
-                nullable = {c.name for c in tables[0].columns if c.nullable}
-                non_from = any(a != "x" for a, _ in m.group_by)
-                bad_right = new in ("RIGHT", "FULL") and any(c in nullable for _, c in m.group_by)
-                if non_from or bad_right:
-                    new = "INNER"
-            m.join_type = new
+            m.join_type = rng.choice([t for t in ("INNER", "LEFT", "RIGHT", "FULL")
+                                      if t != m.join_type])
+            return m, choice
+        if choice == "swap_join2":
+            m.join2_type = rng.choice([t for t in ("INNER", "LEFT", "RIGHT", "FULL")
+                                       if t != m.join2_type])
+            return m, choice
+        if choice == "add_join2":
+            m.join2_type = rng.choice(["INNER", "LEFT", "RIGHT", "FULL"])
+            return m, choice
+        if choice == "drop_join2":
+            m.join2_type = None
             return m, choice
         if choice == "count_swap":
             s = rng.choice([s for s in m.select if s.kind in ("count_star", "count_col")])
@@ -460,18 +483,21 @@ def cte_wrap(q: GenQuery, tables: list[GenTable], rng: random.Random) -> str:
     """Rewrite q into a SEMANTICS-PRESERVING CTE form that wraps the FROM table
     (t1) in `WITH wcte AS (SELECT <t1 cols> FROM t1 [WHERE …]) … FROM wcte`.
 
-    Predicates that touch only t1 are pushed into the CTE — sound iff t1 is not
-    null-extended (no outer join), so filtering it early equals filtering late.
-    This exercises the inliner's projection-mapping and WHERE-conjoin paths while
-    keeping wcte-form ≡ q, so check_seed's pair invariants still hold. SQLite runs
-    the CTE natively; our engine flattens it — any flatten bug shows as a bag
-    mismatch on the sampled databases."""
+    Predicates that touch only t1 are pushed into the CTE — sound iff t1 (x) is
+    never null-extended. A RIGHT/FULL join at EITHER chain level null-extends
+    the whole accumulated left relation (including x, even through a level-1
+    LEFT/INNER) — only a LEFT at either level leaves x alone (it null-extends
+    only the table it's introducing) — so the guard checks both levels for
+    RIGHT/FULL specifically. This exercises the inliner's projection-mapping
+    and WHERE-conjoin paths while keeping wcte-form ≡ q, so check_seed's pair
+    invariants still hold. SQLite runs the CTE natively; our engine flattens
+    it — any flatten bug shows as a bag mismatch on the sampled databases."""
     t1 = tables[0]
     proj = ", ".join(f"x.{c.name} AS {c.name}" for c in t1.columns)
     body = f"SELECT {proj} FROM t1 x"
 
     kept = list(q.where)
-    if q.join_type not in ("LEFT", "RIGHT", "FULL"):
+    if q.join_type not in ("RIGHT", "FULL") and q.join2_type not in ("RIGHT", "FULL"):
         movable = [p for p in q.where if _pred_aliases(p) <= {"x"}]
         if movable:
             body += " WHERE " + " AND ".join(p.render() for p in movable)
@@ -584,9 +610,13 @@ def check_seed(seed: int, bound: int, dbs_per_pair: int) -> tuple[str, bool]:
     #   ~20% materialize the WHOLE query as a CTE (aggregating/multi-table/outer
     #        bodies — the cases inlining never could).
     r = rng.random()
-    if r < 0.25 and base.join_type not in ("LEFT", "RIGHT", "FULL"):
-        # cte_wrap puts the CTE in FROM; combined with an outer join that's a
-        # (correct) scope fail-closed, so only wrap inner/no-join bases here.
+    no_outer_anywhere = (base.join_type not in ("LEFT", "RIGHT", "FULL")
+                         and base.join2_type not in ("LEFT", "RIGHT", "FULL"))
+    if r < 0.25 and no_outer_anywhere:
+        # cte_wrap puts the CTE in FROM; combined with an outer join ANYWHERE
+        # in the chain that's a (correct) scope fail-closed (the CTE-on-outer
+        # guard trips on any outer join in the query, not just one touching the
+        # CTE alias), so only wrap fully-inner/no-join bases here.
         sql1 = cte_wrap(base, tables, rng)
     elif r < 0.45:
         # materialize_wrap keeps any outer join INSIDE the CTE body (allowed).

@@ -6,9 +6,11 @@ Parses a SELECT query and encodes it as Z3 formulas over a symbolic database.
 Supported subset:
   SELECT   — column refs, SUM(col), COUNT(*), COUNT(col), COALESCE(agg, default)
   FROM     — single table with alias
-  JOIN     — any number of INNER joins, OR one LEFT/RIGHT join, each with a
-             simple ON equality condition. Outer joins cannot be combined with
-             another join (multi-table joins must be INNER).
+  JOIN     — any left-deep chain mixing INNER/LEFT/RIGHT/FULL joins, each with
+             a simple ON equality condition. Encoded as a fold (see
+             build_join_bag): each join's ON may only reference the table
+             being joined or a table already in scope (forward references are
+             rejected — real SQL never has them either).
   WHERE    — boolean combinations (AND / OR / NOT) of comparisons (column vs
              literal, column vs column), IS NULL / IS NOT NULL, and
              IN (value-list). Evaluated under three-valued (Kleene) logic per
@@ -23,10 +25,10 @@ dropped predicate or SELECT expression can turn a real divergence into a false
 "equivalent" verdict, which is the one failure mode this tool cannot have.
 
 Out of scope (all rejected with ValueError):
-  CROSS joins, self-joins, outer joins combined with another join,
+  CROSS joins, self-joins, a CTE relation on an outer-join side,
   BETWEEN / LIKE predicates, window
-  functions, CTEs, subqueries, UNION, DISTINCT, LIMIT/OFFSET, string/timestamp
-  ordering comparisons.
+  functions, subqueries outside WHERE IN, UNION, DISTINCT, LIMIT/OFFSET,
+  string/timestamp ordering comparisons.
   (ORDER BY is accepted but ignored — equivalence is checked under bag
   semantics, where output order is immaterial.)
 
@@ -44,7 +46,6 @@ Usage:
 
 from __future__ import annotations
 
-import itertools
 import math
 from dataclasses import dataclass, field
 from typing import Optional
@@ -886,7 +887,7 @@ def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
     from_table = from_table_node.name
     from_alias = from_table_node.alias or from_table
 
-    # ── JOINs (V1: max one join) ─────────────────────────────────────────────
+    # ── JOINs (any left-deep chain of INNER/LEFT/RIGHT/FULL) ─────────────────
     # Use the direct `joins` arg, NOT find_all(exp.Join): find_all descends into
     # a WHERE `IN (SELECT ... JOIN ...)` body and would attribute the subquery's
     # joins to this query. The subquery body's own joins are read when it is
@@ -936,9 +937,8 @@ def _parse_select_ast(stmt: exp.Select) -> ParsedQuery:
             on_right_col=right_col.name,
         ))
 
-    # Multiple joins are allowed when every join is INNER (see encode_query's
-    # dispatch). An outer join combined with any other join is rejected there —
-    # multi-table joins must be INNER in this version.
+    # Join order here is declaration order — encode_query's build_join_bag folds
+    # them left-deep in this same order (SQL's default join-evaluation order).
 
     # ── SELECT expressions ───────────────────────────────────────────────────
     select_exprs = [_parse_select_expr(sel) for sel in stmt.expressions]
@@ -1075,12 +1075,14 @@ def encode_query(
     merges rows with equal keys, and the result is a bounded list of tuples
     whose multiplicities are compared for bag-equivalence in equivalence.py.
 
-    JOIN semantics: the ON condition and the WHERE clause are kept strictly
-    separate. For outer joins the distinction is load-bearing — a filter in
-    WHERE eliminates null-extended rows (making LEFT JOIN behave like INNER),
-    while the same filter in ON merely restricts which rows match. Folding
-    WHERE into the join match (the old behaviour) got this wrong in both
-    directions.
+    JOIN semantics: FROM + JOINs are folded left-deep into a single bag of
+    (present, cellfn) entries (build_join_bag) — VeriEQL's Fig. 5 binary join
+    operator generalized to an N-table chain. The ON condition and the WHERE
+    clause are kept strictly separate throughout the fold. For outer joins the
+    distinction is load-bearing — a filter in WHERE eliminates null-extended
+    rows (making LEFT JOIN behave like INNER), while the same filter in ON
+    merely restricts which rows match. WHERE is applied once, to the final
+    folded tuple, matching the paper's separate σ_φ outer filter.
 
     Args:
         parsed:  Output of parse_query().
@@ -1156,70 +1158,19 @@ def encode_query(
     if len(set(alias_map.values())) != len(alias_map):
         raise ValueError("Self-joins are not supported.")
 
-    # ── Dispatch ─────────────────────────────────────────────────────────────
-    # INNER-only joins (including no join at all) use the N-table join-bag path
-    # below. A single LEFT/RIGHT/FULL join uses the dedicated outer-join path
-    # (its null-extension and ON-vs-WHERE handling are load-bearing). FULL is the
-    # union of the LEFT and RIGHT null-extensions over the same matched pairs.
-    # An outer join combined with any other join is rejected: multi-table joins
-    # must be INNER in this version.
+    # ── Outer-join CTE guard ──────────────────────────────────────────────────
+    # A materialised CTE relation is usable only in FROM / INNER-join positions.
+    # On an outer-join side its cells would need null-extension handling this
+    # encoder doesn't provide for a relation — fail-closed rather than risk a
+    # false "equivalent". (Any outer join anywhere in the chain trips this,
+    # even if the CTE alias itself is only INNER-joined — lifting that to
+    # "only the outer-joined alias matters" is a separate soundness argument,
+    # left for a future pass.)
     outer_joins = [j for j in parsed.joins if j.join_type in ("LEFT", "RIGHT", "FULL")]
-    inner_only = not outer_joins
-    if outer_joins and len(parsed.joins) > 1:
-        raise ValueError(
-            "Outer joins are supported only as a single join; multi-table "
-            "joins must be INNER in this version."
-        )
-
-    # Scope: a materialised CTE relation may be used only on the inner path
-    # (FROM / INNER joins). On an outer-join side its cells would need
-    # null-extension handling that this path doesn't provide — fail-closed.
     if outer_joins and any(v in db.cte_col_types for v in alias_map.values()):
         raise ValueError(
             "A CTE relation combined with an outer (LEFT/RIGHT/FULL) join is not "
             "supported yet — use a CTE in FROM or INNER-join positions.")
-
-    # Two-table outer-join context (only meaningful on the single-outer path).
-    has_join = bool(parsed.joins)
-    join = parsed.joins[0] if has_join else None
-    join_alias = join.alias if has_join else None
-    join_tname = resolve(join_alias) if has_join else None
-    is_left = has_join and join.join_type == "LEFT"
-    is_right = has_join and join.join_type == "RIGHT"
-    is_full = has_join and join.join_type == "FULL"
-    # FULL OUTER = matched pairs ∪ LEFT null-extension ∪ RIGHT null-extension.
-    # left_ext emits null-extended rows for unmatched FROM rows (LEFT + FULL);
-    # right_ext emits them for unmatched join rows (RIGHT + FULL).
-    left_ext = is_left or is_full
-    right_ext = is_right or is_full
-
-    # ── Cell accessors: map (alias, col) → (is_null, value) per row context ──
-    def cellfn_single(i: int):
-        def f(alias, col):
-            return db.cell(resolve(alias), col, i)
-        return f
-
-    def cellfn_pair(i: int, j: int):
-        def f(alias, col):
-            t = resolve(alias)
-            return db.cell(t, col, j if t == join_tname else i)
-        return f
-
-    def cellfn_nullext_left(i: int):
-        def f(alias, col):
-            t = resolve(alias)
-            if t == join_tname:
-                return (BoolVal(True), IntVal(0))  # right side is NULL-extended
-            return db.cell(t, col, i)
-        return f
-
-    def cellfn_nullext_right(j: int):
-        def f(alias, col):
-            t = resolve(alias)
-            if t != join_tname:  # FROM (left) side is NULL-extended
-                return (BoolVal(True), IntVal(0))
-            return db.cell(t, col, j)
-        return f
 
     # ── WHERE: evaluated on the post-join tuple (three-valued: TRUE keeps) ───
     # Paper Fig. 5: σ_φ(Q) = filter(Q, λx.[[φ]]_x = ⊤) — a row survives iff the
@@ -1236,85 +1187,106 @@ def encode_query(
         )
         return t
 
-    # ── INNER join bag: one entry per combination of rows across all tables ──
-    def build_inner_join_bag() -> list[tuple[BoolRef, object]]:
-        """Materialise the inner (and no-join) result as a bag of join rows.
+    # ── Join bag: left-deep fold over FROM + JOINs ────────────────────────────
+    # VeriEQL's Fig. 5 join operators are binary (Q1 ⊗ Q2), so an N-table chain
+    # is left-deep nesting (Q1 ⊗ Q2) ⊗ Q3 …. This fold mirrors that structure
+    # directly: each step joins one more table onto the accumulated relation.
+    def build_join_bag() -> list[tuple[BoolRef, object]]:
+        """Materialise the FROM+JOIN result as a bag of (present, cellfn)
+        entries, folding parsed.joins left-deep in declaration order.
 
-        Each entry is (present, cellfn): present holds iff every participating
-        row exists, every ON equality holds under three-valued logic, and the
-        WHERE clause keeps the combined tuple. For INNER joins ON and WHERE are
-        interchangeable, so folding WHERE in here is sound. Size is bound^n over
-        the n participating tables.
+        Each step: INNER keeps only matched combinations; LEFT/FULL also emit
+        a null-extended entry for every accumulated row with no match; RIGHT/
+        FULL also emit one for every new-table row with no match, NULL-
+        extending EVERY alias accumulated so far — the paper's RIGHT/FULL
+        null-extends against the whole accumulated left relation, not just the
+        immediately preceding table, so a later RIGHT/FULL in a chain nulls
+        every earlier alias in that output row.
+
+        WHERE is applied once, to the final folded tuple, never during the
+        fold — it is a separate outer filter (σ_φ) from a join's own ON (φ on
+        the join operator), and folding it in early (the pre-chain behaviour)
+        got ON-vs-WHERE wrong for outer joins.
+
+        cellfn(alias, col) -> (is_null, value); a null-extended alias reads as
+        (True, 0). Size is bound^n over n INNER-joined tables, +O(bound) per
+        LEFT/RIGHT/FULL level.
         """
-        aliases = [from_alias] + [j.alias for j in parsed.joins]
-        # Per-source row counts: a base table has `bound` rows; a materialised
-        # CTE relation has one row per output tuple (may be ≠ bound).
-        ranges = [range(len(db.exists[resolve(a)])) for a in aliases]
-        bag: list[tuple[BoolRef, object]] = []
-        for combo in itertools.product(*ranges):
-            idx = dict(zip(aliases, combo))
+        def cellfn_from_idx(idx: dict):
+            def f(alias, col):
+                i = idx.get(alias)
+                if i is None:
+                    return (BoolVal(True), IntVal(0))
+                return db.cell(resolve(alias), col, i)
+            return f
 
-            def cellfn(a, c, _idx=idx):
-                return db.cell(resolve(a), c, _idx[a])
+        covered = [from_alias]
+        bag: list[tuple[BoolRef, dict]] = [
+            (db.exists[from_tname][i], {from_alias: i})
+            for i in range(len(db.exists[from_tname]))
+        ]
 
-            clauses = [db.exists[resolve(a)][idx[a]] for a in aliases]
-            for j in parsed.joins:
-                ln, lv = cellfn(j.on_left_alias, j.on_left_col)
-                rn, rv = cellfn(j.on_right_alias, j.on_right_col)
-                clauses.append(And(Not(ln), Not(rn), lv == rv))
-            clauses.append(where_all(cellfn))
-            bag.append((And(clauses), cellfn))
-        return bag
+        for jn in parsed.joins:
+            a = jn.alias
+            tname = resolve(a)
+            nrows = len(db.exists[tname])
+            left_ext = jn.join_type in ("LEFT", "FULL")
+            right_ext = jn.join_type in ("RIGHT", "FULL")
 
-    # ── ON condition only (three-valued equality); WHERE applies after ───────
-    def on_match(i: int, j: int) -> BoolRef:
-        cf = cellfn_pair(i, j)
-        ln, lv = cf(join.on_left_alias, join.on_left_col)
-        rn, rv = cf(join.on_right_alias, join.on_right_col)
-        return And(db.exists[join_tname][j], Not(ln), Not(rn), lv == rv)
+            # ON scope: each side must be the table just joined or one already
+            # in scope. Forward references (an ON referencing a table joined
+            # later in the chain) aren't valid SQL either — the FROM clause
+            # introduces tables left to right — so this narrows nothing real.
+            allowed = set(covered) | {a}
+            if jn.on_left_alias not in allowed or jn.on_right_alias not in allowed:
+                raise ValueError(
+                    f"JOIN ON for '{a}' references a table not yet in scope; "
+                    "a join's ON condition may only reference the table being "
+                    "joined or a table introduced earlier in the FROM clause."
+                )
+            if a not in (jn.on_left_alias, jn.on_right_alias):
+                raise ValueError(
+                    f"JOIN ON for '{a}' must reference the joined table.")
 
-    # ── Memoised row/pair survival predicates ────────────────────────────────
-    _pair_cache: dict[tuple[int, int], BoolRef] = {}
-    _nl_cache: dict[int, BoolRef] = {}
-    _nr_cache: dict[int, BoolRef] = {}
-    _single_cache: dict[int, BoolRef] = {}
+            def on3v(idx: dict, j: int, _jn=jn, _a=a) -> BoolRef:
+                cf = cellfn_from_idx({**idx, _a: j})
+                ln, lv = cf(_jn.on_left_alias, _jn.on_left_col)
+                rn, rv = cf(_jn.on_right_alias, _jn.on_right_col)
+                return And(Not(ln), Not(rn), lv == rv)
 
-    def pair_present(i: int, j: int) -> BoolRef:
-        """Matched pair (i, j) survives: both rows exist, ON holds, WHERE holds."""
-        if (i, j) not in _pair_cache:
-            _pair_cache[(i, j)] = And(
-                db.exists[from_tname][i], on_match(i, j), where_all(cellfn_pair(i, j)))
-        return _pair_cache[(i, j)]
+            new_bag: list[tuple[BoolRef, dict]] = []
+            # matched_row[j] collects (entry_present ∧ matched) across every
+            # accumulated entry, for RIGHT/FULL's "no accumulated row matched"
+            # check below.
+            matched_row: list[list[BoolRef]] = [[] for _ in range(nrows)]
 
-    def has_match_left(i: int) -> BoolRef:
-        return Or([on_match(i, j) for j in range(bound)])
+            for e_present, e_idx in bag:
+                row_matches = []
+                for j in range(nrows):
+                    m = And(db.exists[tname][j], on3v(e_idx, j))
+                    row_matches.append(m)
+                    matched_row[j].append(And(e_present, m))
+                    new_idx = dict(e_idx)
+                    new_idx[a] = j
+                    new_bag.append((And(e_present, m), new_idx))
+                if left_ext:
+                    ext_idx = dict(e_idx)
+                    ext_idx[a] = None
+                    any_match = Or(row_matches) if row_matches else BoolVal(False)
+                    new_bag.append((And(e_present, Not(any_match)), ext_idx))
 
-    def has_match_right(j: int) -> BoolRef:
-        return Or([And(db.exists[from_tname][i], on_match(i, j)) for i in range(bound)])
+            if right_ext:
+                for j in range(nrows):
+                    any_match = Or(matched_row[j]) if matched_row[j] else BoolVal(False)
+                    ext_idx = {alias: None for alias in covered}
+                    ext_idx[a] = j
+                    new_bag.append((And(db.exists[tname][j], Not(any_match)), ext_idx))
 
-    def nullext_left_present(i: int) -> BoolRef:
-        """LEFT-join null-extended row for unmatched FROM row i. WHERE is
-        evaluated with the join side NULL — so WHERE r.x = 5 kills the row
-        (LEFT≡INNER) while WHERE r.x IS NULL keeps it (anti-join)."""
-        if i not in _nl_cache:
-            _nl_cache[i] = And(
-                db.exists[from_tname][i], Not(has_match_left(i)),
-                where_all(cellfn_nullext_left(i)))
-        return _nl_cache[i]
+            bag = new_bag
+            covered.append(a)
 
-    def nullext_right_present(j: int) -> BoolRef:
-        """RIGHT-join null-extended row for unmatched join row j (no existing
-        FROM row matches the ON condition; WHERE plays no part in matching)."""
-        if j not in _nr_cache:
-            _nr_cache[j] = And(
-                db.exists[join_tname][j], Not(has_match_right(j)),
-                where_all(cellfn_nullext_right(j)))
-        return _nr_cache[j]
-
-    def single_present(i: int) -> BoolRef:
-        if i not in _single_cache:
-            _single_cache[i] = And(db.exists[from_tname][i], where_all(cellfn_single(i)))
-        return _single_cache[i]
+        return [(And(present, where_all(cellfn_from_idx(idx))), cellfn_from_idx(idx))
+                for present, idx in bag]
 
     # ── Projection of one SELECT column through a cell accessor ──────────────
     def proj(sel: ParsedSelectExpr, cellfn) -> SymValue:
@@ -1410,239 +1382,76 @@ def encode_query(
         else:  # count_star / count_col
             result_col_types[sel.alias] = "INTEGER"
 
-    # ── INNER path (0..N joins): build the join bag, then project/aggregate ──
-    if inner_only:
-        bag = build_inner_join_bag()
+    # ── Build the join bag, then project/aggregate/group over it ─────────────
+    bag = build_join_bag()
 
-        if has_group:
-            # GROUP BY keys (and bare SELECT columns) may come from ANY joined
-            # table — dedup runs over join-bag rows, not FROM rows.
-            gk_set = {(galias, gcol) for (galias, gcol) in parsed.group_by}
-            for sel in parsed.select_exprs:
-                if sel.expr_type == "column" and \
-                        (sel.table_alias, sel.col_name) not in gk_set:
-                    # A bare column not in GROUP BY is ambiguous (invalid in
-                    # standard SQL); reject rather than invent a value.
-                    raise ValueError(
-                        f"Non-aggregated SELECT column '{sel.col_name}' must "
-                        "appear in GROUP BY."
-                    )
-
-            def group_key_eq(cf_a, cf_b) -> BoolRef:
-                clauses = []
-                for (galias, gcol) in parsed.group_by:
-                    n1, v1 = cf_a(galias, gcol)
-                    n2, v2 = cf_b(galias, gcol)
-                    # NULLs group together (SQL groups NULL keys into one group).
-                    clauses.append(Or(And(n1, n2),
-                                      And(Not(n1), Not(n2), v1 == v2)))
-                return And(clauses) if clauses else BoolVal(True)
-
-            for g, (g_present, g_cellfn) in enumerate(bag):
-                # Row g leads its group iff it is present and no earlier present
-                # row shares its key.
-                earlier = [Not(And(bag[h][0], group_key_eq(bag[h][1], g_cellfn)))
-                           for h in range(g)]
-                base_present = And(g_present, *earlier) if earlier else g_present
-                contribs = [(And(group_key_eq(cf, g_cellfn), pres), cf)
-                            for (pres, cf) in bag]
-                cols = []
-                for sel in parsed.select_exprs:
-                    if sel.expr_type == "column":
-                        n, v = g_cellfn(sel.table_alias, sel.col_name)
-                        cols.append(SymValue(n, v))
-                    else:
-                        cols.append(agg_value(sel, contribs))
-                present = And(base_present, *having_clauses(contribs)) \
-                    if parsed.having_conditions else base_present
-                output.append(OutputTuple(present, cols))
-
-        elif has_agg:
-            # Aggregate without GROUP BY: exactly one output row.
-            for sel in parsed.select_exprs:
-                if sel.expr_type == "column":
-                    raise ValueError(
-                        f"Bare column '{sel.alias}' mixed with aggregates "
-                        "requires GROUP BY."
-                    )
-            contribs = [(pres, cf) for (pres, cf) in bag]
-            cols = [agg_value(sel, contribs) for sel in parsed.select_exprs]
-            present = And(having_clauses(contribs)) \
-                if parsed.having_conditions else BoolVal(True)
-            output.append(OutputTuple(present, cols))
-
-        else:
-            # Plain projection: one candidate tuple per join-bag row.
-            if parsed.having_conditions:
-                raise ValueError(
-                    "HAVING without GROUP BY or aggregates is not supported.")
-            for (pres, cf) in bag:
-                cols = [proj(sel, cf) for sel in parsed.select_exprs]
-                output.append(OutputTuple(pres, cols))
-
-        return QueryFormula(
-            output=output,
-            arity=arity,
-            col_aliases=col_aliases,
-            extra_constraints=extra_constraints,
-            bound=bound,
-            col_types=result_col_types,
-        )
-
-    # ── Single LEFT/RIGHT outer-join path (unchanged) ────────────────────────
     if has_group:
-        # ── GROUP BY: one output tuple per distinct key (Dedup + Eval). ──────
-        # V1 restriction: group keys (and bare SELECT columns) must come from
-        # the FROM table — the dedup machinery indexes groups by FROM rows.
-        for (galias, gcol) in parsed.group_by:
-            if resolve(galias) != from_tname:
-                raise ValueError(
-                    "V1 supports GROUP BY only on columns of the FROM table; "
-                    f"'{galias}.{gcol}' belongs to the joined table. "
-                    "Put that table in the FROM position to group by its columns."
-                )
-        group_key_cols = {gcol for (_, gcol) in parsed.group_by}
+        # GROUP BY keys (and bare SELECT columns) may come from ANY joined
+        # table (incl. a null-extended outer side) — dedup runs over join-bag
+        # rows, and group_key_eq is NULL-safe (NULL keys group together), so a
+        # nullable key from a RIGHT/FULL null-extension merges correctly.
+        gk_set = {(galias, gcol) for (galias, gcol) in parsed.group_by}
         for sel in parsed.select_exprs:
-            if sel.expr_type == "column":
-                if resolve(sel.table_alias) != from_tname:
-                    raise ValueError(
-                        "Non-aggregated SELECT columns in a GROUP BY query must "
-                        "come from the FROM table in V1."
-                    )
-                # A bare column that is not a group key is invalid standard SQL
-                # (its value within a group is ambiguous; PostgreSQL rejects it,
-                # SQLite picks an arbitrary row). Encoding it as the group
-                # leader's value would silently invent deterministic semantics.
-                if sel.col_name not in group_key_cols:
-                    raise ValueError(
-                        f"Non-aggregated SELECT column '{sel.col_name}' must "
-                        "appear in GROUP BY."
-                    )
-        if right_ext:
-            # Null-extended right rows have NULL FROM-side keys and form one
-            # extra group. If a key column were nullable, matched rows could
-            # also carry NULL keys and would have to merge with that group —
-            # not modelled, so reject rather than risk a wrong verdict.
-            from_table_obj = schema.get_table(from_tname)
-            for (_, gcol) in parsed.group_by:
-                col_obj = from_table_obj.get_column(gcol) if from_table_obj else None
-                if col_obj is None or col_obj.nullable:
-                    raise ValueError(
-                        "RIGHT or FULL JOIN with GROUP BY requires non-nullable "
-                        f"group key columns in V1 ('{gcol}' is nullable)."
-                    )
+            if sel.expr_type == "column" and \
+                    (sel.table_alias, sel.col_name) not in gk_set:
+                # A bare column not in GROUP BY is ambiguous (invalid in
+                # standard SQL); reject rather than invent a value.
+                raise ValueError(
+                    f"Non-aggregated SELECT column '{sel.col_name}' must "
+                    "appear in GROUP BY."
+                )
 
-        def group_key_eq(i: int, g: int) -> BoolRef:
+        def group_key_eq(cf_a, cf_b) -> BoolRef:
             clauses = []
             for (galias, gcol) in parsed.group_by:
-                n1, v1 = db.cell(from_tname, gcol, i)
-                n2, v2 = db.cell(from_tname, gcol, g)
+                n1, v1 = cf_a(galias, gcol)
+                n2, v2 = cf_b(galias, gcol)
                 # NULLs group together (SQL groups NULL keys into one group).
                 clauses.append(Or(And(n1, n2),
                                   And(Not(n1), Not(n2), v1 == v2)))
             return And(clauses) if clauses else BoolVal(True)
 
-        def alive(i: int) -> BoolRef:
-            """FROM row i contributes at least one surviving post-WHERE row."""
-            if has_join:
-                terms = [pair_present(i, j) for j in range(bound)]
-                if left_ext:
-                    terms.append(nullext_left_present(i))
-                return Or(terms)
-            return single_present(i)
-
-        for g in range(bound):
-            # Row g leads its group iff it is alive and no earlier alive row
-            # shares its key. "Alive" already implies the group is non-empty.
-            earlier = [Not(And(alive(h), group_key_eq(h, g))) for h in range(g)]
-            base_present = And(alive(g), *earlier) if earlier else alive(g)
-
-            contribs = []
-            for i in range(bound):
-                keq = group_key_eq(i, g)
-                if has_join:
-                    for j in range(bound):
-                        contribs.append((And(keq, pair_present(i, j)), cellfn_pair(i, j)))
-                    if left_ext:
-                        contribs.append((And(keq, nullext_left_present(i)), cellfn_nullext_left(i)))
-                else:
-                    contribs.append((And(keq, single_present(i)), cellfn_single(i)))
-
+        for g, (g_present, g_cellfn) in enumerate(bag):
+            # Row g leads its group iff it is present and no earlier present
+            # row shares its key.
+            earlier = [Not(And(bag[h][0], group_key_eq(bag[h][1], g_cellfn)))
+                       for h in range(g)]
+            base_present = And(g_present, *earlier) if earlier else g_present
+            contribs = [(And(group_key_eq(cf, g_cellfn), pres), cf)
+                        for (pres, cf) in bag]
             cols = []
             for sel in parsed.select_exprs:
                 if sel.expr_type == "column":
-                    n, v = db.cell(from_tname, sel.col_name, g)   # group-key value
+                    n, v = g_cellfn(sel.table_alias, sel.col_name)
                     cols.append(SymValue(n, v))
                 else:
                     cols.append(agg_value(sel, contribs))
-            present = And([base_present, *having_clauses(contribs)]) \
+            present = And(base_present, *having_clauses(contribs)) \
                 if parsed.having_conditions else base_present
             output.append(OutputTuple(present, cols))
 
-        if right_ext:
-            # All null-extended right rows share the single all-NULL FROM-side
-            # key, so they form exactly one extra candidate group.
-            contribs_r = [(nullext_right_present(j), cellfn_nullext_right(j))
-                          for j in range(bound)]
-            base_present_r = Or([a for a, _ in contribs_r]) if contribs_r else BoolVal(False)
-
-            cols_r = []
-            for sel in parsed.select_exprs:
-                if sel.expr_type == "column":
-                    cols_r.append(SymValue(BoolVal(True), IntVal(0)))  # NULL key
-                else:
-                    cols_r.append(agg_value(sel, contribs_r))
-            present_r = And([base_present_r, *having_clauses(contribs_r)]) \
-                if parsed.having_conditions else base_present_r
-            output.append(OutputTuple(present_r, cols_r))
-
     elif has_agg:
-        # ── Aggregate without GROUP BY: exactly one output row. ──────────────
+        # Aggregate without GROUP BY: exactly one output row.
         for sel in parsed.select_exprs:
             if sel.expr_type == "column":
                 raise ValueError(
                     f"Bare column '{sel.alias}' mixed with aggregates "
                     "requires GROUP BY."
                 )
-
-        contribs = []
-        for i in range(bound):
-            if has_join:
-                for j in range(bound):
-                    contribs.append((pair_present(i, j), cellfn_pair(i, j)))
-                if left_ext:
-                    contribs.append((nullext_left_present(i), cellfn_nullext_left(i)))
-            else:
-                contribs.append((single_present(i), cellfn_single(i)))
-        if right_ext:
-            for j in range(bound):
-                contribs.append((nullext_right_present(j), cellfn_nullext_right(j)))
-
+        contribs = [(pres, cf) for (pres, cf) in bag]
         cols = [agg_value(sel, contribs) for sel in parsed.select_exprs]
-        # An ungrouped aggregate always returns one row; HAVING may drop it.
         present = And(having_clauses(contribs)) \
             if parsed.having_conditions else BoolVal(True)
         output.append(OutputTuple(present, cols))
 
     else:
-        # ── Plain projection: one tuple per surviving row / matching pair. ───
+        # Plain projection: one candidate tuple per join-bag row.
         if parsed.having_conditions:
-            raise ValueError("HAVING without GROUP BY or aggregates is not supported.")
-        for i in range(bound):
-            if not has_join:
-                cols = [proj(sel, cellfn_single(i)) for sel in parsed.select_exprs]
-                output.append(OutputTuple(single_present(i), cols))
-                continue
-            for j in range(bound):
-                cols = [proj(sel, cellfn_pair(i, j)) for sel in parsed.select_exprs]
-                output.append(OutputTuple(pair_present(i, j), cols))
-            if left_ext:
-                cols = [proj(sel, cellfn_nullext_left(i)) for sel in parsed.select_exprs]
-                output.append(OutputTuple(nullext_left_present(i), cols))
-        if right_ext:
-            for j in range(bound):
-                cols = [proj(sel, cellfn_nullext_right(j)) for sel in parsed.select_exprs]
-                output.append(OutputTuple(nullext_right_present(j), cols))
+            raise ValueError(
+                "HAVING without GROUP BY or aggregates is not supported.")
+        for (pres, cf) in bag:
+            cols = [proj(sel, cf) for sel in parsed.select_exprs]
+            output.append(OutputTuple(pres, cols))
 
     return QueryFormula(
         output=output,

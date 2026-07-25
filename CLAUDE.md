@@ -277,18 +277,21 @@ scaling roadmap memory.
 All suites are standalone (no pytest required, but pytest-compatible):
 `.venv/bin/python tests/<file>.py`.
 
-- `tests/smoke_test.py` — 32 end-to-end checks over `check_equivalence()`:
-  equivalent/divergent pairs (incl. LEFT/RIGHT ON-vs-WHERE, multi-table INNER
-  joins, join reordering, GROUP BY on a joined column) and fail-closed rejection
+- `tests/smoke_test.py` — 84 end-to-end checks over `check_equivalence()`:
+  equivalent/divergent pairs (incl. LEFT/RIGHT/FULL ON-vs-WHERE, multi-table
+  INNER joins, left-deep outer-join chains mixing INNER/LEFT/RIGHT/FULL, join
+  reordering, GROUP BY on any joined table's column) and fail-closed rejection
   of unsupported constructs.
 - `tests/paper_cases_test.py` — 21 regression tests from the VeriEQL paper
   (`docs/references/veriEQL-2024.pdf`): IC-PK composite keys, IC-FK/IC-NN
   equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
   bag multiplicity, plus multi-table-join chains.
-- `tests/differential_test.py` — differential fuzzing: random query pairs (incl.
-  3-table INNER chains) verified by Z3, then cross-checked against concrete
-  SQLite (every "equivalent" attacked with sampled DBs within the bound; every
-  "divergent" witness replayed). `--seeds N --bound B`.
+- `tests/differential_test.py` — differential fuzzing: random query pairs
+  (incl. 2-join `t1⋈t2⋈t3` chains, each level independently INNER/LEFT/RIGHT/
+  FULL, plus chain-growing/shrinking mutations) verified by Z3, then
+  cross-checked against concrete SQLite (every "equivalent" attacked with
+  sampled DBs within the bound; every "divergent" witness replayed).
+  `--seeds N --bound B`.
 - `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeout
   defaults/clamp, persistence, divergent explain) with Supabase/LLM stubbed.
 - `tests/cli_verify_test.py` — 24 tests for `sqlverify verify` with the transport
@@ -318,7 +321,7 @@ All suites are standalone (no pytest required, but pytest-compatible):
 | Decision | Rationale |
 |---|---|
 | `bound=3` hardcoded in `equivalence.py` | Catches >95% of real SQL semantic bugs. Not exposed in UI — would confuse engineers. Power users can override via env var. |
-| Join scope: any number of INNER joins, or one LEFT/RIGHT/FULL join | INNER joins are encoded as an N-table "join bag" (one entry per row combination across the joined tables); for INNER joins ON ≡ WHERE, so there is no null-extension subtlety. A single LEFT/RIGHT/FULL join uses a dedicated outer-join path where ON and WHERE are encoded separately (the distinction changes outer-join results). FULL is the union of the LEFT and RIGHT null-extensions over the same matched pairs (`left_ext`/`right_ext` flags). An outer join combined with any other join is rejected — multi-table joins must be INNER. Still no window functions, UNION, CROSS, or self-joins. (Non-recursive CTEs and uncorrelated `IN (SELECT …)` WHERE subqueries ARE supported — see Known limitations.) |
+| Join scope: any left-deep chain mixing INNER/LEFT/RIGHT/FULL | `build_join_bag()` folds `FROM` + every `JOIN` left-deep, one table at a time, into a single bag of `(present, cellfn)` entries — VeriEQL's own binary join operator (Fig. 4/5's `Q⊗Q`) generalized to an N-table chain, since the paper has no native N-ary join either. ON and WHERE are kept strictly separate throughout the fold; WHERE is applied once, to the final tuple, never during matching — that's what keeps ON-vs-WHERE faithful at every chain level, not just a two-table case. A LEFT/FULL step null-extends the newly joined table for any accumulated row with no match; a RIGHT/FULL step null-extends the WHOLE accumulated left relation (every alias joined so far) for any new-table row with no match — mirrors the paper's `T_Null` being as wide as the left operand, so a RIGHT/FULL deeper in a chain nulls every earlier alias in that output row, not just its immediate predecessor. Each join's ON may only reference the table being joined or a table already in scope (forward references aren't valid SQL either, so this narrows nothing real). GROUP BY runs generically over the bag (NULL-safe key equality), so group keys may come from any table in the chain, including a null-extended outer side — no more FROM-table-only or non-nullable-key restriction. Still no window functions, UNION, CROSS, or self-joins. A materialized CTE relation combined with an outer join anywhere in the same query is still rejected fail-closed (see Known limitations). (Non-recursive CTEs and uncorrelated `IN (SELECT …)` WHERE subqueries ARE supported.) |
 | Fail-closed parsing/encoding | Any SQL construct outside the supported subset raises `ValueError` (→ status `error`) instead of being silently dropped. A dropped predicate or SELECT expression weakens the encoding and can produce a false "equivalent" — the one failure mode a verifier must not have. Never "skip" unsupported syntax. |
 | Witness cross-check in `equivalence.py` | After Z3 finds a divergence, both queries run on the SQLite witness; if their outputs agree, the verdict is downgraded to `error` (encoder bug) instead of showing a fake counterexample. |
 | HTMX for frontend interactivity | No React build step, no npm. Jinja2 + HTMX keeps the stack simple and server-rendered. |
@@ -345,7 +348,7 @@ All suites are standalone (no pytest required, but pytest-compatible):
 
 Everything outside the supported subset is **rejected with a clear error** (fail-closed), never silently ignored. The subset is widening over time (see the SQL-subset-expansion roadmap memory); anything not yet supported stays fail-closed.
 
-- Any number of INNER joins per query, OR exactly one LEFT/RIGHT/FULL join. An outer join cannot be combined with another join (multi-table joins must be INNER). FULL OUTER is supported as a single join (the union of the LEFT and RIGHT null-extensions over the same matched pairs; ON-vs-WHERE faithful on both sides). GROUP BY with a FULL (or RIGHT) join requires non-nullable FROM-table group keys. No CROSS or self-joins. Each JOIN ON must be a single column equality. Note: the INNER join bag is `bound^n` over n tables, so deep chains (n≥4) get slower and may return `unknown` on timeout — the bound is never silently lowered.
+- Any left-deep chain mixing INNER/LEFT/RIGHT/FULL joins (`build_join_bag` in `core/sql_encoder.py`), each with a single-column equality ON condition. A join's ON may only reference the table being joined or a table already in scope (a forward reference — an ON naming a table joined later in the chain — is rejected; it isn't valid SQL either). No CROSS or self-joins. GROUP BY may key on any table in the chain, including a null-extended outer side (no more FROM-table-only or non-nullable-key restriction). A materialized CTE relation combined with an outer join anywhere in the same query's chain is rejected fail-closed — even if the CTE alias itself is only INNER-joined (a documented conservative guard, not a soundness gap: lifting it to "only the outer-joined alias matters" is a separate argument, left for a future pass). Note: the join bag is `bound^n` over n INNER-joined tables (+O(bound) per LEFT/RIGHT/FULL level), so deep chains (n≥4) get slower and may return `unknown` on timeout — the bound is never silently lowered.
 - Non-recursive CTEs (`WITH`) are **materialized** the way VeriEQL does it (`With(Q̃,R⃗,Q)`, Fig. 4/5): each CTE body is encoded to a relation and bound into the SymbolicDB as a pseudo-table (`register_cte_relation` in `core/sql_encoder.py`, via `db.cte_col_types` + per-source row counts), which the main query reads like a base table — the paper's `D′ = D[Rᵢ ↦ [[Qᵢ]]_D]`. A CTE **body may be any supported query** — aggregating (`GROUP BY`/`SUM`), multi-table joins, outer joins — and its output can be filtered/joined/re-aggregated by the reading query. **Scope** (see the CTE roadmap memory): a CTE relation may be used in `FROM` and `INNER`-join positions; on an **outer-join side it fails closed** (the inner path provides no null-extension for a materialized relation's cells). Also fail-closed: `WITH RECURSIVE` and CTE-on-CTE (a CTE body referencing another CTE). Base tables shared between a CTE body and the main query are handled soundly (independent relations over the same symbolic rows), so a CTE over `T` joined back to `T` verifies rather than tripping the self-join guard.
 - No window functions (`ROW_NUMBER`, `RANK`, etc.)
 - `UNION`, `SELECT DISTINCT`, `SELECT *`, `LIMIT`/`OFFSET` are rejected. Subqueries are rejected **except** uncorrelated `col IN (SELECT …)` in WHERE (see next bullet); scalar subqueries (`= (SELECT …)`), `EXISTS`, and derived tables in FROM stay fail-closed.
