@@ -14,6 +14,8 @@ Deploy on Render:
 import os
 import secrets
 import time
+import types
+import typing
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -31,7 +33,16 @@ from slowapi.errors import RateLimitExceeded
 from core.logger import setup_logging
 from core.analytics import init_analytics, shutdown_analytics
 from loguru import logger
-from api.verify import router as verify_router, limiter
+from api.verify import (
+    router as verify_router,
+    limiter,
+    VerifyTextRequest,
+    VerifyResponse,
+    MAX_BOUND,
+    MAX_FILE_BYTES,
+    MAX_TIMEOUT_MS,
+    CICD_TIMEOUT_MS,
+)
 from api.auth import router as auth_router
 from api.keys import router as keys_router
 from api.projects import router as projects_router
@@ -95,9 +106,17 @@ async def lifespan(app: FastAPI):
     shutdown_analytics()  # flush queued events so the last runs aren't lost
     logger.info("SQLVerify shutting down")
 
-# API docs are gated behind ENABLE_DOCS so the interactive docs + raw OpenAPI
-# schema aren't publicly reachable in production. Unset/false → FastAPI serves a
-# real 404 for /docs, /redoc, and /openapi.json (nothing to allowlist).
+# Swagger/ReDoc are gated behind ENABLE_DOCS so the interactive console + raw
+# OpenAPI schema aren't publicly reachable in production. Unset/false → FastAPI
+# serves a real 404 for them (nothing to allowlist). That 404 is the actual
+# access control; robots.txt is not, so neither path is listed there.
+#
+# They are mounted at /api-docs, NOT /docs: the generated schema is the whole
+# app (auth, billing, webhooks, page routes), which is internal plumbing rather
+# than a customer-facing contract, and Swagger UI renders client-side so search
+# engines only ever see an empty div. /docs is reserved for the hand-written
+# public documentation below — the URL developers actually guess, and the one
+# that can be crawled and ranked.
 _DOCS_ENABLED = os.getenv("ENABLE_DOCS", "").lower() == "true"
 
 app = FastAPI(
@@ -105,8 +124,8 @@ app = FastAPI(
     description="Formal verification for AI-generated SQL queries.",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url="/docs" if _DOCS_ENABLED else None,
-    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    docs_url="/api-docs" if _DOCS_ENABLED else None,
+    redoc_url="/api-redoc" if _DOCS_ENABLED else None,
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
 
@@ -276,7 +295,14 @@ templates.env.globals["site_url"] = _SITE_URL
 async def robots_txt():
     # Crawlers fetch robots.txt from the domain root, so it can't live under
     # /static. Keep the private/auth/API surface out of the index; everything
-    # else (/, /pricing, /terms, /privacy) is crawlable by default.
+    # else (/, /pricing, /integrations, /docs, /terms, /privacy) is crawlable.
+    #
+    # Deliberately NOT disallowed: /docs and /openapi.json. Every Disallow is a
+    # PREFIX match, so a "Disallow: /docs" line would silently block the whole
+    # /docs/* documentation tree — the organic surface we most want crawled —
+    # the moment it grows a second page. It also bought nothing: robots.txt is
+    # a request to well-behaved crawlers, never access control. What keeps the
+    # OpenAPI schema private is ENABLE_DOCS being unset in prod (a real 404).
     body = (
         "User-agent: *\n"
         "Disallow: /api/\n"
@@ -285,8 +311,6 @@ async def robots_txt():
         "Disallow: /keys\n"
         "Disallow: /projects\n"
         "Disallow: /billing\n"
-        "Disallow: /docs\n"
-        "Disallow: /openapi.json\n"
         "\n"
         f"Sitemap: {_SITE_URL}/sitemap.xml\n"
     )
@@ -298,6 +322,8 @@ async def sitemap_xml():
     pages = [
         ("/", "weekly", "1.0"),
         ("/pricing", "monthly", "0.8"),
+        ("/docs", "weekly", "0.9"),
+        ("/integrations", "monthly", "0.7"),
         ("/terms", "yearly", "0.3"),
         ("/privacy", "yearly", "0.3"),
     ]
@@ -378,6 +404,95 @@ async def keys_page(request: Request):
         request=request,
         name="keys.html",
         context={"user_email": user_email, "keys": keys},
+    )
+
+
+# --------------------------------------------------------------------------
+# Public documentation (/docs)
+#
+# The field tables on this page are introspected from the very Pydantic models
+# the endpoint actually uses, so a renamed/retyped/added field shows up in the
+# docs on the next request instead of rotting into a lie. Only the prose
+# descriptions are hand-written; a field with no entry in the maps below renders
+# an empty cell, which is the visible nudge to write one.
+# --------------------------------------------------------------------------
+
+def _type_label(annotation) -> str:
+    """Render a Pydantic annotation as a JSON-ish type name (`str` → string)."""
+    origin = typing.get_origin(annotation)
+    is_union = origin is typing.Union or (
+        hasattr(types, "UnionType") and origin is getattr(types, "UnionType")
+    )
+    if is_union:
+        args = typing.get_args(annotation)
+        inner = " | ".join(_type_label(a) for a in args if a is not type(None))
+        return f"{inner} | null" if type(None) in args else inner
+    if origin is not None:  # list[str], dict[str, int], …
+        annotation = origin
+    return {
+        str: "string", int: "integer", float: "number",
+        bool: "boolean", dict: "object", list: "array",
+    }.get(annotation, getattr(annotation, "__name__", str(annotation)))
+
+
+def _describe_model(model, descriptions: dict) -> list:
+    rows = []
+    for name, field in model.model_fields.items():
+        required = field.is_required()
+        rows.append({
+            "name": name,
+            "type": _type_label(field.annotation),
+            "required": required,
+            "default": None if required else field.default,
+            "description": descriptions.get(name, ""),
+        })
+    return rows
+
+
+_REQUEST_FIELD_DOCS = {
+    "ddl_sql": "Flyway-style CREATE TABLE DDL defining the schema both queries run "
+               "against. ALTER TABLE statements are folded in statement order.",
+    "sql_v1": "The original / trusted SELECT query.",
+    "sql_v2": "The rewritten query to prove equivalent to sql_v1.",
+    "dialect": "Parser dialect hint. Both queries are read as the same dialect — "
+               "cross-dialect comparison is out of scope.",
+    "bound": f"Maximum rows per table Z3 explores. Higher catches rarer bugs and "
+             f"costs solve time. Values above {MAX_BOUND} are rejected.",
+    "timeout_ms": f"Solver budget in milliseconds. Clamped to {MAX_TIMEOUT_MS:,}. "
+                  f"On timeout the status is unknown — never a wrong verdict.",
+    "project_id": "Optional project UUID to tag the run with. Silently dropped if "
+                  "the project isn't yours.",
+}
+
+_RESPONSE_FIELD_DOCS = {
+    "status": "equivalent, divergent, unknown, or error. See the table below.",
+    "divergence_reason": "Short summary of how the two queries differ. Present when "
+                         "status is divergent.",
+    "counterexample_db": "A concrete database — table name to rows — on which the two "
+                         "queries disagree. This is the proof, and it is replayable.",
+    "query_v1_output": "Rows sql_v1 returns when run on counterexample_db.",
+    "query_v2_output": "Rows sql_v2 returns when run on counterexample_db.",
+    "error_message": "Why the input was rejected. Present when status is error.",
+    "explanation": "Prose explanation of the divergence, written by the configured "
+                   "LLM. Populated automatically for divergent results.",
+}
+
+
+@app.get("/docs")
+async def docs_page(request: Request):
+    user_email = getattr(request.state, "user_email", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="docs.html",
+        context={
+            "user_email": user_email,
+            "request_fields": _describe_model(VerifyTextRequest, _REQUEST_FIELD_DOCS),
+            "response_fields": _describe_model(VerifyResponse, _RESPONSE_FIELD_DOCS),
+            "max_bound": MAX_BOUND,
+            "max_timeout_ms": MAX_TIMEOUT_MS,
+            "default_timeout_ms": CICD_TIMEOUT_MS,
+            "max_file_kb": MAX_FILE_BYTES // 1024,
+        },
     )
 
 

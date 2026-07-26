@@ -40,8 +40,9 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 ```
 SQLVerify/
 ├── main.py                         # FastAPI app entry point — routers, pinned CORS, rate-limit + JWT middleware,
-│                                   #   error handlers (404/500), public pages (/, /pricing, /terms, /privacy,
-│                                   #   /robots.txt, /sitemap.xml), site_url Jinja global
+│                                   #   error handlers (404/500), public pages (/, /pricing, /docs, /integrations,
+│                                   #   /terms, /privacy, /robots.txt, /sitemap.xml), site_url Jinja global,
+│                                   #   _describe_model() model-introspected docs tables
 │                                   #   (config is read via os.getenv per-module; there is no config.py)
 ├── CLAUDE.md                       # This file
 ├── .env                            # Never commit — secrets live here
@@ -113,6 +114,8 @@ SQLVerify/
         ├── landing.html            # ✅ DONE — marketing page + GitHub + magic-link sign-in
         ├── verify.html             # ✅ DONE — project selector + SQL Input tab + History tab (HTMX wired)
         ├── pricing.html            # ✅ DONE — plans; CTAs → /billing/checkout
+        ├── docs.html               # ✅ DONE — public API docs (/docs); field tables introspected from the Pydantic models
+        ├── integrations.html       # ✅ DONE — public CLI + MCP setup page (/integrations)
         ├── keys.html               # ✅ DONE — per-user API key management
         ├── projects.html           # ✅ DONE — per-user project management (create/list/delete)
         ├── terms.html              # ✅ DONE — Terms of Service (public, no auth)
@@ -230,10 +233,12 @@ SQLVerify/
 - `landing.html` — marketing page; GitHub sign-in + magic-link email form (HTMX)
 - `verify.html` — project selector (`#project-select`) + two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS handles tabs; the form and History tab `hx-include` the selector so a run is tagged with the chosen project and History filters by it.
 - `pricing.html` — plan cards; CTAs point at `/billing/checkout?plan=…`
+- `docs.html` — **public API documentation** at `GET /docs` (in the `JWTMiddleware` allowlist + sitemap). The request/response field tables are **introspected from the live `VerifyTextRequest`/`VerifyResponse` Pydantic models** (`_describe_model` in `main.py`), so a renamed or added field updates the docs on the next request instead of rotting; only the prose descriptions (`_REQUEST_FIELD_DOCS`/`_RESPONSE_FIELD_DOCS`) are hand-written, and a field with no entry renders an empty cell as a visible nudge. Limits (`MAX_BOUND`, `MAX_TIMEOUT_MS`, …) are imported from `api/verify.py`, never retyped. The Swagger console lives at `/api-docs` so `/docs` stays free for this page.
+- `integrations.html` — public marketing page for the CLI + MCP surfaces (real install commands mirroring `cli/README.md` and `mcp/README.md`); served by `GET /integrations` in `main.py`, in the `JWTMiddleware` public allowlist and the sitemap
 - `keys.html` — API key management (create form + list)
 - `projects.html` — project management (create form + list + delete)
 - `terms.html` / `privacy.html` — legal pages, served by public `GET /terms` and `GET /privacy` in `main.py` (in the `JWTMiddleware` public allowlist); linked from the `base.html` footer
-- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://sqlverify.com`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing`, `/docs`, `/openapi.json` and points at the sitemap, which lists the four public pages.
+- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://sqlverify.com`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing` and points at the sitemap, which lists the six public pages (`/`, `/pricing`, `/docs`, `/integrations`, `/terms`, `/privacy`). **`/docs` and `/openapi.json` are deliberately NOT disallowed:** every `Disallow` is a prefix match, so a `Disallow: /docs` line would silently block the whole `/docs/*` documentation tree the moment it grows a second page — and it never secured anything anyway (robots.txt is a request, not access control; the OpenAPI schema is kept private by `ENABLE_DOCS` being unset in prod, a real 404).
 - `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
 - `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
 - `partials/api_keys.html` — key list + the show-once raw-key banner
@@ -379,7 +384,7 @@ SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude # claude | openai | google
 SITE_URL=                 # full origin, e.g. https://sqlverify.com (no trailing slash) — used by auth redirects + CORS
-ENABLE_DOCS=              # optional — set "true" to serve /docs, /redoc, /openapi.json; unset (default) 404s them in prod
+ENABLE_DOCS=              # optional — set "true" to serve the Swagger console at /api-docs, /api-redoc, /openapi.json; unset (default) 404s them in prod. NOT /docs — that's the public docs page.
 POSTHOG_API_KEY=          # optional — PostHog project key; unset disables analytics entirely (no-op)
 POSTHOG_HOST=             # optional — https://us.i.posthog.com (default) | https://eu.i.posthog.com
 

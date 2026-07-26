@@ -31,14 +31,18 @@ from starlette.routing import Match
 from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
 _PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
-_PUBLIC_EXACT = {"/", "/api/verify/health", "/pricing", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping"}
+_PUBLIC_EXACT = {"/", "/api/verify/health", "/pricing", "/integrations", "/docs", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping"}
 
-# /docs, /redoc, /openapi.json are gated by ENABLE_DOCS (mirrors main.py). When
-# enabled they must be auth-exempt so the browser can load Swagger UI + schema
+# The Swagger/ReDoc console is gated by ENABLE_DOCS (mirrors main.py). When
+# enabled these must be auth-exempt so the browser can load the UI + schema
 # without a session; when disabled FastAPI never registers them, so an
 # unauthenticated request falls through to a real 404 via _route_exists().
+#
+# Note these are /api-docs and /api-redoc, NOT /docs — /docs is the hand-written
+# public documentation page and is permanently public via _PUBLIC_EXACT above,
+# independent of ENABLE_DOCS.
 _DOCS_ENABLED = os.getenv("ENABLE_DOCS", "").lower() == "true"
-_PUBLIC_PREFIXES_DOCS = ("/docs", "/redoc", "/openapi.json")
+_PUBLIC_PREFIXES_DOCS = ("/api-docs", "/api-redoc", "/openapi.json")
 
 _jwks_client: PyJWKClient | None = None
 

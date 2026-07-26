@@ -10,19 +10,32 @@
     <!-- SEO / social preview -->
     <meta
       name="description"
-      content="{% block description %}Prove your AI-generated SQL is correct before it ships. SQLVerify uses Z3/SMT formal verification to confirm two queries are equivalent — or hand you a counterexample database.{% endblock %}"
+      content="{% block description %}Prove AI-generated SQL is correct before it ships. Z3/SMT formal verification confirms two queries are equivalent — or hands you a counterexample.{% endblock %}"
     />
-    <link rel="canonical" href="{{ site_url }}{% block canonical_path %}{% endblock %}" />
+    <link
+      rel="canonical"
+      href="{{ site_url }}{% block canonical_path %}{{ request.url.path }}{% endblock %}"
+    />
+
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="SQLVerify" />
-    <meta property="og:title" content="{% block og_title %}SQLVerify — Formal Verification for AI-Generated SQL{% endblock %}" />
-    <meta property="og:description" content="{% block og_description %}Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter.{% endblock %}" />
-    <meta property="og:url" content="{{ site_url }}{% block canonical_path_og %}{% endblock %}" />
-    <meta property="og:image" content="{{ site_url }}/static/img/og-image.png" />
+    <meta
+      property="og:title"
+      content="{% block og_title %}{{ self.title() }}{% endblock %}"
+    />
+    <meta
+      property="og:description"
+      content="{% block og_description %}{{ self.description() }}{% endblock %}"
+    />
+    <meta
+      property="og:url"
+      content="{{ site_url }}{{ self.canonical_path() }}"
+    />
+    <meta
+      property="og:image"
+      content="{{ site_url }}/static/img/og-image.png"
+    />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="{% block og_title_tw %}SQLVerify — Formal Verification for AI-Generated SQL{% endblock %}" />
-    <meta name="twitter:description" content="{% block og_description_tw %}Prove your AI-generated SQL is correct before it ships — formal verification, not just a linter.{% endblock %}" />
-    <meta name="twitter:image" content="{{ site_url }}/static/img/og-image.png" />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -42,13 +55,18 @@
     <script
       src="https://unpkg.com/htmx.org@1.9.6/dist/htmx.min.js"
       integrity="sha384-FhXw7b6AlE/jyjlZH5iHa/tTe9EpJ1Y55RjcgPbjeWMskSxZt1v9qkxLJWNJaGni"
-      crossorigin="anonymous"></script>
+      crossorigin="anonymous"
+    ></script>
   </head>
   <body>
     <div class="app-container">
       <!-- Topbar -->
       <header class="topbar">
-        <a href="/" class="topbar-logo" style="text-decoration: none; color: inherit;">
+        <a
+          href="/"
+          class="topbar-logo"
+          style="text-decoration: none; color: inherit"
+        >
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="24"

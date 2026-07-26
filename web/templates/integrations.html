@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 
-{% block title %}Integrations - SQLVerify{% endblock %}
+{% block title %}Integrations — CLI, CI/CD & MCP | SQLVerify{% endblock %}
+
+{% block description %}Bring SQLVerify's formal SQL verification into your terminal, CI/CD pipeline, or AI coding agent — CLI for GitHub Actions and GitLab CI, MCP server for Claude Code, Claude Desktop, and Cursor.{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width: 800px; margin: 2rem auto; padding: 2rem;">
@@ -18,9 +20,10 @@
       Verify migrations and AI-generated queries from your terminal or automate them in GitHub Actions and GitLab CI.
     </p>
     <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; margin-bottom: 1rem;">
-      pip install sqlverify-cli<br><br>
-      export SQLVERIFY_API_KEY="your_api_key_here"<br>
-      sqlverify check --schema schema.sql --v1 original.sql --v2 generated.sql
+      git clone https://github.com/NguyenTienDat377/SQLVerify && cd SQLVerify<br>
+      pipx install ./cli<br><br>
+      export SQLVERIFY_API_KEY=sqv_your_key_here<br>
+      sqlverify verify --ddl schema.sql --v1 original.sql --v2 generated.sql
     </div>
     <a href="/keys" class="btn btn-secondary btn-small">Get your API Key</a>
   </div>
@@ -38,10 +41,11 @@
 {
   "mcpServers": {
     "sqlverify": {
-      "command": "npx",
-      "args": ["-y", "@sqlverify/mcp-server"],
+      "command": "/abs/path/to/SQLVerify/mcp/.venv/bin/python",
+      "args": ["/abs/path/to/SQLVerify/mcp/sqlverify_mcp.py"],
       "env": {
-        "SQLVERIFY_API_KEY": "your_api_key_here"
+        "SQLVERIFY_API_KEY": "sqv_your_key_here",
+        "SQLVERIFY_URL": "https://sqlverify.com"
       }
     }
   }
