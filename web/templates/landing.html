@@ -181,6 +181,31 @@
             </div>
         </section>
 
+        <!-- How It Works Section -->
+        <section id="how-it-works" class="how-it-works">
+            <div class="section-header">
+                <h2>How it works</h2>
+                <p>Three steps, no production data, and an answer you can act on.</p>
+            </div>
+            <div class="steps-grid">
+                <div class="step-card glass-panel">
+                    <div class="step-number">1</div>
+                    <h3>Give it your schema</h3>
+                    <p>Paste your Flyway DDL, or point the CLI at your <code>migrations/</code> directory. SQLVerify folds every <code>CREATE TABLE</code> and <code>ALTER TABLE</code> into a model of your real schema — primary keys, foreign keys, and <code>NOT NULL</code> included. Your data never leaves your database; the schema is all it needs.</p>
+                </div>
+                <div class="step-card glass-panel">
+                    <div class="step-number">2</div>
+                    <h3>Both queries become math</h3>
+                    <p>Each query is compiled into a logical formula under bag semantics and three-valued NULL logic — the same rules your database actually follows. The Z3 theorem prover then hunts for any database at all, within the row bound, on which the two queries disagree.</p>
+                </div>
+                <div class="step-card glass-panel">
+                    <div class="step-number">3</div>
+                    <h3>Proof, or a counterexample</h3>
+                    <p>If no such database exists, the queries are equivalent — proven, not merely untested. If one does, you get the exact tables and rows, with both queries replayed on them so you can see precisely where they diverge and why.</p>
+                </div>
+            </div>
+        </section>
+
         <!-- CTA Section -->
         <section class="cta-section glass-panel">
             <h2>Ready to secure your AI queries?</h2>

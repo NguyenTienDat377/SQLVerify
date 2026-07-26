@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}Documentation — SQL Equivalence API | SQLVerify{% endblock %}
+
+{% block description %}SQLVerify API documentation: prove two SQL queries are semantically equivalent with Z3/SMT formal verification, or get a concrete counterexample database where they diverge. REST API, CLI, and MCP server for AI agents.{% endblock %}
+
+{% block content %}
+<div class="panel" style="max-width: 860px; margin: 2rem auto; padding: 2rem;">
+
+  <header style="margin-bottom: 2.5rem;">
+    <h1 style="font-size: 1.75rem; margin-bottom: 0.5rem;">SQLVerify Documentation</h1>
+    <p style="color: var(--text-secondary); font-size: 1.05rem; line-height: 1.6;">
+      SQLVerify formally proves that two SQL queries return the same result on
+      <em>every</em> database — or hands you a concrete database where they
+      disagree. It is a solver, not a linter: an <code>equivalent</code> verdict
+      is a proof, and a <code>divergent</code> verdict comes with the
+      counterexample that produced it.
+    </p>
+  </header>
+
+  <!-- ================= Quickstart ================= -->
+  <section style="margin-bottom: 3rem;">
+    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Quickstart</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">
+      Every surface talks to the same engine. Pick whichever fits where the
+      query lives. You'll need an API key from the
+      <a href="/keys">API Keys</a> page first.
+    </p>
+
+    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">HTTP</h3>
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">curl -X POST {{ site_url }}/api/verify/text \
+  -H "Authorization: Bearer $SQLVERIFY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ddl_sql": "CREATE TABLE users (id INT PRIMARY KEY, org_id INT);",
+    "sql_v1": "SELECT id FROM users",
+    "sql_v2": "SELECT id FROM users WHERE org_id IS NOT NULL"
+  }'</div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">CLI</h3>
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">export SQLVERIFY_API_KEY=sqv_your_key_here
+
+sqlverify verify --ddl schema.sql --v1 before.sql --v2 after.sql
+
+# or verify every query your branch changed:
+sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">AI agents (MCP)</h3>
+    <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
+      Expose verification as a tool to Claude Code, Claude Desktop, or Cursor so
+      an agent can check its own SQL rewrites in-loop and revise against a real
+      counterexample instead of guessing.
+    </p>
+    <a href="/integrations" class="btn btn-secondary btn-small">Setup instructions →</a>
+  </section>
+
+  <!-- ================= API reference ================= -->
+  <section style="margin-bottom: 3rem;">
+    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">API reference</h2>
+
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 0.75rem 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.9rem; margin-bottom: 1.25rem;">
+      <strong>POST</strong> /api/verify/text
+    </div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">Authentication</h3>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+      Send your key as <code>Authorization: Bearer sqv_…</code> or
+      <code>X-API-Key: sqv_…</code>. Keys are shown once at creation and stored
+      only as a hash — if you lose one, revoke it and mint another.
+    </p>
+
+    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">Request body</h3>
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+        <thead>
+          <tr style="border-bottom: 2px solid var(--panel-border); text-align: left;">
+            <th style="padding: 0.5rem;">Field</th>
+            <th style="padding: 0.5rem;">Type</th>
+            <th style="padding: 0.5rem;">Default</th>
+            <th style="padding: 0.5rem;">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in request_fields %}
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">{{ f.name }}</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary); white-space: nowrap;">{{ f.type }}</td>
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">
+              {%- if f.required -%}
+                <strong>required</strong>
+              {%- elif f.default is none -%}
+                null
+              {%- else -%}
+                {{ f.default }}
+              {%- endif -%}
+            </td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">{{ f.description }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Response body</h3>
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+        <thead>
+          <tr style="border-bottom: 2px solid var(--panel-border); text-align: left;">
+            <th style="padding: 0.5rem;">Field</th>
+            <th style="padding: 0.5rem;">Type</th>
+            <th style="padding: 0.5rem;">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in response_fields %}
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">{{ f.name }}</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary); white-space: nowrap;">{{ f.type }}</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">{{ f.description }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Status values</h3>
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+        <tbody>
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">equivalent</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">Proven: no database within the bound distinguishes the two queries.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">divergent</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">The queries disagree. <code>counterexample_db</code> holds a database that proves it, and both outputs are replayed on it.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">unknown</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">The solver ran out of time. <strong>Not a proof of equivalence</strong> — it means we don't know.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
+            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">error</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">The input used SQL outside the supported subset, or the DDL didn't parse. SQLVerify fails closed rather than silently ignoring what it can't encode.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Example: a divergent result</h3>
+    <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
+      The quickstart request above returns this — the rewrite silently drops
+      users whose <code>org_id</code> is NULL:
+    </p>
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">{
+  "status": "divergent",
+  "divergence_reason": "A row returned by sql_v1 is absent from sql_v2",
+  "counterexample_db": {
+    "users": [{ "id": 1, "org_id": null }]
+  },
+  "query_v1_output": [{ "id": 1 }],
+  "query_v2_output": [],
+  "error_message": null,
+  "explanation": "sql_v2 adds `WHERE org_id IS NOT NULL`. Under three-valued
+    logic `NULL IS NOT NULL` is false, so the row is filtered out …"
+}</div>
+
+    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Error responses</h3>
+    <div style="overflow-x: auto;">
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+        <tbody>
+          <tr style="border-bottom: 1px solid var(--panel-border);">
+            <td style="padding: 0.5rem; font-family: var(--font-mono);">401</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">Missing, malformed, or revoked API key.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border);">
+            <td style="padding: 0.5rem; font-family: var(--font-mono);">402</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">Free-tier monthly run limit reached. See <a href="/pricing">pricing</a>.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border);">
+            <td style="padding: 0.5rem; font-family: var(--font-mono);">422</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">Body failed validation — a missing field, or a <code>bound</code> above {{ max_bound }}.</td>
+          </tr>
+          <tr style="border-bottom: 1px solid var(--panel-border);">
+            <td style="padding: 0.5rem; font-family: var(--font-mono);">429</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">Per-IP rate limit exceeded. Back off and retry.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="color: var(--text-secondary); margin-top: 0.75rem; font-size: 0.9rem;">
+      Note that a <code>divergent</code> verdict is still an HTTP <strong>200</strong> —
+      the request succeeded, the queries just aren't equivalent. Only the codes
+      above indicate a failed call.
+    </p>
+  </section>
+
+  <!-- ================= Limits ================= -->
+  <section style="margin-bottom: 3rem;">
+    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Limits</h2>
+    <ul style="color: var(--text-secondary); line-height: 1.8; padding-left: 1.25rem;">
+      <li><code>bound</code> caps at <strong>{{ max_bound }}</strong> rows per table.</li>
+      <li><code>timeout_ms</code> defaults to <strong>{{ "{:,}".format(default_timeout_ms) }}</strong> and is clamped to <strong>{{ "{:,}".format(max_timeout_ms) }}</strong>.</li>
+      <li>Uploaded SQL files cap at <strong>{{ max_file_kb }} KB</strong> each.</li>
+      <li>An <code>equivalent</code> verdict is sound <em>within the bound</em> — it rules out every counterexample up to that many rows per table, which covers the overwhelming majority of real rewrite bugs.</li>
+    </ul>
+  </section>
+
+  <!-- ================= SQL subset ================= -->
+  <section>
+    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Supported SQL</h2>
+    <p style="color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem;">
+      SQLVerify handles multi-table join chains mixing <code>INNER</code>,
+      <code>LEFT</code>, <code>RIGHT</code>, and <code>FULL</code> joins,
+      <code>GROUP BY</code> and <code>HAVING</code> with aggregates,
+      three-valued NULL logic, non-recursive CTEs, and uncorrelated
+      <code>IN (SELECT …)</code> subqueries. NULLs, primary keys, foreign keys,
+      and <code>NOT NULL</code> constraints are all modelled.
+    </p>
+    <p style="color: var(--text-secondary); line-height: 1.7;">
+      Anything outside that subset — window functions, <code>UNION</code>,
+      <code>SELECT DISTINCT</code>, <code>LIMIT</code>, correlated subqueries —
+      returns <code>error</code> rather than a guess. That is deliberate: a
+      verifier that quietly skips what it can't encode would report
+      <code>equivalent</code> for queries it never actually checked, which is the
+      one failure mode a proof tool must not have.
+    </p>
+  </section>
+
+</div>
+{% endblock %}
