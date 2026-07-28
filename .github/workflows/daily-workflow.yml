@@ -1,0 +1,46 @@
+name: Daily Stats
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # midnight UTC daily
+  workflow_dispatch: # allows manual trigger for testing
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch daily stats
+        id: stats
+        run: |
+          RESPONSE=$(curl -s -H "X-Internal-Secret: ${{ secrets.INTERNAL_STATS_SECRET }}" \
+            https://sqlverify.com/api/stats/daily)
+          echo "response=$RESPONSE" >> "$GITHUB_OUTPUT"
+
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_DAILY_WEBHOOK }}
+          STATS: ${{ steps.stats.outputs.response }}
+        run: |
+          TOTAL=$(echo "$STATS" | jq -r '.verifications.total')
+          EQUIV=$(echo "$STATS" | jq -r '.verifications.equivalent')
+          DIVERGENT=$(echo "$STATS" | jq -r '.verifications.divergent')
+          ERROR=$(echo "$STATS" | jq -r '.verifications.error')
+          NEW_SUBS=$(echo "$STATS" | jq -r '.new_subscriptions')
+          DATE=$(echo "$STATS" | jq -r '.date')
+
+          curl -s -H "Content-Type: application/json" \
+          -d "{
+            \"embeds\": [{
+              \"title\": \"📈 Daily Report — $DATE\",
+              \"color\": 3447003,
+              \"fields\": [
+                {\"name\": \"🔍 Verifications\", \"value\": \"$TOTAL runs\", \"inline\": true},
+                {\"name\": \"✅ Equivalent\", \"value\": \"$EQUIV\", \"inline\": true},
+                {\"name\": \"⚠️ Divergent\", \"value\": \"$DIVERGENT\", \"inline\": true},
+                {\"name\": \"❌ Errors\", \"value\": \"$ERROR\", \"inline\": true},
+                {\"name\": \"💰 New subscriptions\", \"value\": \"$NEW_SUBS\", \"inline\": true}
+              ],
+              \"footer\": {\"text\": \"SQLVerify Daily Cron\"}
+            }]
+          }" \
+          "$DISCORD_WEBHOOK"

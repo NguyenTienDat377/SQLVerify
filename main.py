@@ -48,6 +48,7 @@ from api.keys import router as keys_router
 from api.projects import router as projects_router
 from api.billing import router as billing_router
 from api.webhooks import router as webhooks_router
+from api.stats import router as stats_router
 from auth.middleware import JWTMiddleware
 from db.repositories.api_keys import list_api_keys
 from db.repositories.projects import list_projects
@@ -224,6 +225,7 @@ app.include_router(keys_router)
 app.include_router(projects_router)
 app.include_router(billing_router)
 app.include_router(webhooks_router)
+app.include_router(stats_router)
 
 
 # Mount static files

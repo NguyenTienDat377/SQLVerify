@@ -244,10 +244,13 @@ def test_neq_already_excludes_null():
 
 
 def test_is_not_null_is_not_silently_inverted():
-    # Regression guard for the sqlglot 30.13 AST change: `IS NOT NULL` used to
-    # arrive as Not(Is(col, Null)) and now arrives as a single Is node carrying
-    # negate=True. The encoder matched only the wrapper, so the newer sqlglot
-    # made `IS NOT NULL` encode as `IS NULL` — the predicate's exact inverse.
+    # Regression guard for the sqlglot 30.14 AST change (PR #7938): under the
+    # postgres dialect `IS NOT NULL` used to arrive as Not(Is(col, Null)) and
+    # now arrives as a single Is node carrying negate=True. The encoder matched
+    # only the wrapper, so the newer sqlglot made `IS NOT NULL` encode as
+    # `IS NULL` — the predicate's exact inverse. This case runs under postgres
+    # (see _check), which is exactly the dialect that changed; the other
+    # dialects still emit the wrapper, so only this one exercises the flag.
     #
     # Asserted semantically rather than on the parse tree: the two spellings
     # below are the same predicate, but they take *different* paths through

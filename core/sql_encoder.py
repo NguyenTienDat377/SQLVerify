@@ -529,10 +529,11 @@ def _parse_predicate(node: exp.Expression):
         if isinstance(node, node_type):
             return _parse_comparison(node, op_str)
 
-    # IS [NOT] NULL. sqlglot's AST shape for the NOT form is version-dependent
-    # and changed in a *minor* release: up to 30.12 it wrapped the node as
-    # Not(Is(...)) (caught by the exp.Not branch above), from 30.13 it keeps a
-    # single Is node carrying negate=True. Both shapes must be read here.
+    # IS [NOT] NULL. sqlglot's AST shape for the NOT form is both version- AND
+    # dialect-dependent, and changed in a *minor* release: it wraps the node as
+    # Not(Is(...)) (caught by the exp.Not branch above) everywhere except
+    # postgres from 30.14, which keeps a single Is node carrying negate=True
+    # (sqlglot PR #7938). Both shapes must be read here.
     # Reading `negate` is not optional politeness: a version that reports the
     # negation via the flag while we only looked for the wrapper silently
     # encoded `IS NOT NULL` as `IS NULL` — an inverted predicate, which is the

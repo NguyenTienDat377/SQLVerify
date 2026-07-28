@@ -31,7 +31,7 @@ from starlette.routing import Match
 from db.repositories.api_keys import KEY_PREFIX, resolve_api_key
 
 _PUBLIC_PREFIXES = ("/static", "/auth", "/api/webhooks")
-_PUBLIC_EXACT = {"/", "/api/verify/health", "/pricing", "/integrations", "/docs", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping"}
+_PUBLIC_EXACT = {"/", "/api/verify/health", "/pricing", "/integrations", "/docs", "/terms", "/privacy", "/robots.txt", "/sitemap.xml", "/ping", "/api/stats/daily"}
 
 # The Swagger/ReDoc console is gated by ENABLE_DOCS (mirrors main.py). When
 # enabled these must be auth-exempt so the browser can load the UI + schema

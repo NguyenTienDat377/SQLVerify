@@ -130,3 +130,27 @@ async def get_active_subscription_by_user(user_id: str) -> Optional[dict]:
     except Exception as e:
         print(f"[db] Failed to get subscription for user {user_id}: {e}")
         return None
+
+from datetime import datetime, timezone
+
+
+async def get_new_subscriptions_today() -> int:
+    """
+    Count subscriptions created today (UTC) — used as a revenue-event proxy
+    for the daily Discord report. Returns 0 on failure.
+    """
+    day_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    try:
+        client = get_client()
+        response = (
+            client.table("subscriptions")
+            .select("id", count="exact")
+            .gte("created_at", day_start.isoformat())
+            .execute()
+        )
+        return response.count or 0
+    except Exception as e:
+        print(f"[db] Failed to count today's subscriptions: {e}")
+        return 0

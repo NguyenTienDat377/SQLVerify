@@ -292,8 +292,10 @@ All suites are standalone (no pytest required, but pytest-compatible):
   equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
   bag multiplicity, plus multi-table-join chains. Also guards the sqlglot AST
   contract for `IS NOT NULL` (`test_is_not_null_is_not_silently_inverted`) —
-  sqlglot 30.13 moved it from `Not(Is(...))` to `Is(..., negate=True)`, and
-  reading the AST for only one shape silently inverted the predicate.
+  sqlglot 30.14 moved it, **for the postgres dialect only**, from
+  `Not(Is(...))` to `Is(..., negate=True)`, and reading the AST for only one
+  shape silently inverted the predicate. sqlglot reshapes AST nodes in minor
+  releases and per-dialect, so treat every sqlglot bump as a correctness change.
 - `tests/differential_test.py` — differential fuzzing: random query pairs
   (incl. 2-join `t1⋈t2⋈t3` chains, each level independently INNER/LEFT/RIGHT/
   FULL, plus chain-growing/shrinking mutations) verified by Z3, then

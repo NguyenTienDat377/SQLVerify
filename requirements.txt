@@ -15,8 +15,9 @@ python-dotenv>=1.2.2
 httpx>=0.28.1
 pytest>=9.1.1
 pytest-asyncio>=1.4.0
-# sqlglot changes AST node shapes in MINOR releases (30.13 moved `IS NOT NULL`
-# from Not(Is(...)) to Is(..., negate=True)), and the encoder reads that AST
+# sqlglot changes AST node shapes in MINOR releases, per-dialect (30.14 moved
+# postgres `IS NOT NULL` from Not(Is(...)) to Is(..., negate=True); ~55 breaking
+# changes landed across 30.13+30.14 alone), and the encoder reads that AST
 # directly — so a bump here is a correctness change, not a housekeeping one.
 # Always run tests/paper_cases_test.py + tests/smoke_test.py before merging one.
 sqlglot>=30.14.0

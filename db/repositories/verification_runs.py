@@ -171,3 +171,35 @@ async def count_runs_this_month(user_id: str) -> int:
     except Exception as e:
         logger.error("Failed to count monthly runs for {uid}: {err}", uid=user_id, err=e)
         return 0
+
+async def get_daily_stats() -> dict:
+    """
+    Count today's verification runs (UTC) grouped by status.
+
+    Used by the internal daily stats endpoint / Discord report. Returns all
+    zeros on failure so a DB hiccup never breaks the daily cron.
+    """
+    day_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    counts = {"total": 0, "equivalent": 0, "divergent": 0, "error": 0, "unknown": 0}
+    try:
+        client = get_client()
+        response = (
+            client.table("verification_runs")
+            .select("status")
+            .gte("created_at", day_start.isoformat())
+            .execute()
+        )
+        rows = response.data or []
+        counts["total"] = len(rows)
+        for row in rows:
+            status = row.get("status", "unknown")
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts["unknown"] += 1
+        return counts
+    except Exception as e:
+        logger.error("Failed to fetch daily stats: {err}", err=e)
+        return counts
