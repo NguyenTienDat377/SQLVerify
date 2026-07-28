@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Integrations — CLI, CI/CD & MCP | SQLVerify{% endblock %}
+{% block title %}Integrations — CLI, CI/CD & MCP | Skolem{% endblock %}
 
-{% block description %}Bring SQLVerify's formal SQL verification into your terminal, CI/CD pipeline, or AI coding agent — CLI for GitHub Actions and GitLab CI, MCP server for Claude Code, Claude Desktop, and Cursor.{% endblock %}
+{% block description %}Bring Skolem's formal SQL verification into your terminal, CI/CD pipeline, or AI coding agent — CLI for GitHub Actions and GitLab CI, MCP server for Claude Code, Claude Desktop, and Cursor.{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width: 800px; margin: 2rem auto; padding: 2rem;">
   <div style="margin-bottom: 2rem;">
     <h1 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Developer Integrations</h1>
-    <p style="color: var(--text-secondary);">Bring SQLVerify directly into your terminal, CI/CD pipeline, or IDE.</p>
+    <p style="color: var(--text-secondary);">Bring Skolem directly into your terminal, CI/CD pipeline, or IDE.</p>
   </div>
 
   <div style="margin-bottom: 3rem;">
@@ -20,10 +20,10 @@
       Verify migrations and AI-generated queries from your terminal or automate them in GitHub Actions and GitLab CI.
     </p>
     <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; margin-bottom: 1rem;">
-      git clone https://github.com/NguyenTienDat377/SQLVerify && cd SQLVerify<br>
+      git clone https://github.com/NguyenTienDat377/Skolem && cd Skolem<br>
       pipx install ./cli<br><br>
-      export SQLVERIFY_API_KEY=sqv_your_key_here<br>
-      sqlverify verify --ddl schema.sql --v1 original.sql --v2 generated.sql
+      export SKOLEM_API_KEY=skm_your_key_here<br>
+      skolem verify --ddl schema.sql --v1 original.sql --v2 generated.sql
     </div>
     <a href="/keys" class="btn btn-secondary btn-small">Get your API Key</a>
   </div>
@@ -40,12 +40,12 @@
     <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; overflow-x: auto; white-space: pre;">
 {
   "mcpServers": {
-    "sqlverify": {
-      "command": "/abs/path/to/SQLVerify/mcp/.venv/bin/python",
-      "args": ["/abs/path/to/SQLVerify/mcp/sqlverify_mcp.py"],
+    "skolem": {
+      "command": "/abs/path/to/Skolem/mcp/.venv/bin/python",
+      "args": ["/abs/path/to/Skolem/mcp/skolem_mcp.py"],
       "env": {
-        "SQLVERIFY_API_KEY": "sqv_your_key_here",
-        "SQLVERIFY_URL": "https://sqlverify.com"
+        "SKOLEM_API_KEY": "skm_your_key_here",
+        "SKOLEM_URL": "https://skolem.dev"
       }
     }
   }

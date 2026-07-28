@@ -236,6 +236,6 @@ async def logout(request: Request):
 async def get_swagger_docs(request: Request):
     return get_swagger_ui_html(
         openapi_url="/openapi.json",
-        title="SQLVerify API Docs",
+        title="Skolem API Docs",
         oauth2_redirect_url="/auth/docs/oauth2-redirect",
     )

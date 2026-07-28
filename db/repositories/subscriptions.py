@@ -38,7 +38,7 @@ async def upsert_subscription(
     Uses upsert so the same subscription_id is never duplicated.
 
     Args:
-        user_id: SQLVerify user the subscription belongs to, passed through LS
+        user_id: Skolem user the subscription belongs to, passed through LS
                  checkout custom data (meta.custom_data.user_id). Used to resolve
                  a user's plan/quota; may be None for purchases made outside the
                  in-app /billing/checkout flow.

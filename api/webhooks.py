@@ -111,7 +111,7 @@ async def _notify_discord(
     color, emoji = _EVENT_STYLE.get(event_name, (3447003, "📢"))
     price = _TIER_PRICE.get(tier, "unknown")
 
-        # Mask email: dat@sqlverify.com → d***@sqlverify.com
+        # Mask email: dat@skolem.dev → d***@skolem.dev
     masked_email = customer_email
     if "@" in customer_email:
         local, domain = customer_email.split("@", 1)
@@ -126,7 +126,7 @@ async def _notify_discord(
             {"name": "📧 Email",  "value": masked_email,                     "inline": True},
             {"name": "🔑 UserID", "value": user_id or "unknown",             "inline": False},
         ],
-        "footer": {"text": "SQLVerify · Lemon Squeezy"},
+        "footer": {"text": "Skolem · Lemon Squeezy"},
     }
 
     try:

@@ -1,7 +1,7 @@
 """
 auth/middleware.py
 
-JWT authentication middleware for SQLVerify.
+JWT authentication middleware for Skolem.
 
 Reads the Supabase access_token from the `sb-access-token` HttpOnly cookie
 (set by /auth/set-session after GitHub OAuth) or from an `Authorization: Bearer`
@@ -126,8 +126,8 @@ class JWTMiddleware(BaseHTTPMiddleware):
     request.state.user_id:
       - browser session: Supabase JWT in the `sb-access-token` cookie, or a
         plain `Authorization: Bearer <jwt>`;
-      - CI/API client: a per-user API key as `Authorization: Bearer sqv_...`
-        or `X-API-Key: sqv_...`.
+      - CI/API client: a per-user API key as `Authorization: Bearer skm_...`
+        or `X-API-Key: skm_...`.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -151,7 +151,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
                 user_email = payload.get("email")
                 auth_method = "session"
 
-        # 2) Per-user API key — sqv_ Bearer or X-API-Key header.
+        # 2) Per-user API key — skm_ Bearer or X-API-Key header.
         if not user_id:
             api_key = x_api_key or (
                 bearer if bearer and bearer.startswith(KEY_PREFIX) else None

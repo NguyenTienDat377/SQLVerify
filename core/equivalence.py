@@ -167,7 +167,7 @@ def _run(
             error_message=(
                 "Internal inconsistency: the solver reported a divergence, but "
                 "both queries return identical results on the generated witness "
-                "database. This indicates an encoding bug in SQLVerify — do not "
+                "database. This indicates an encoding bug in Skolem — do not "
                 "trust this verdict; please report it with the schema and queries."
             ),
         )

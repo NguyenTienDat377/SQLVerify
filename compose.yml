@@ -2,7 +2,7 @@ services:
   api:
     build:
       context: .
-    container_name: sqlverify-api
+    container_name: skolem-api
     env_file: .env
     environment:
       PORT: 8000
@@ -15,7 +15,7 @@ services:
 
   redis:
     image: redis:7.2-alpine
-    container_name: sqlverify-redis
+    container_name: skolem-redis
     restart: unless-stopped
     ports:
       - "6379:6379"

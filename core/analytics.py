@@ -1,7 +1,7 @@
 """
 core/analytics.py
 
-PostHog product analytics for SQLVerify — server-side capture only.
+PostHog product analytics for Skolem — server-side capture only.
 
 Why server-side: the core event (a verification run) happens in the backend and
 is the *same* event across all three delivery surfaces (web / CI / MCP). A

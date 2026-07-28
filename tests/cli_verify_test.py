@@ -1,7 +1,7 @@
 """
 tests/cli_verify_test.py
 
-Tests for the `sqlverify verify` CLI command (cli/sqlverify_cli.py).
+Tests for the `skolem verify` CLI command (cli/skolem_cli.py).
 
 The CLI is a thin HTTP client, so the transport is stubbed: httpx.post is
 replaced with a recorder that returns a canned VerifyResponse. What's exercised
@@ -28,7 +28,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cli.sqlverify_cli as cli
+import cli.skolem_cli as cli
 
 # ── Stub the transport ───────────────────────────────────────────────────────
 
@@ -70,8 +70,8 @@ def _reset():
     _next_response = {"status": "equivalent"}
     _next_status_code = 200
     _raise_transport = None
-    os.environ["SQLVERIFY_API_KEY"] = "sqv_test_key"
-    os.environ.pop("SQLVERIFY_URL", None)
+    os.environ["SKOLEM_API_KEY"] = "skm_test_key"
+    os.environ.pop("SKOLEM_URL", None)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ def test_transport_failure_is_cli_error_not_a_verdict():
     with tempfile.TemporaryDirectory() as tmp:
         code, _, err = _run(_argv(_files(tmp), "--output", "json"))
     assert code == cli.EXIT_CLI_ERROR, f"expected 2, got {code}"
-    assert "Could not reach SQLVerify" in err, err
+    assert "Could not reach Skolem" in err, err
 
 
 def test_auth_and_quota_failures_are_cli_errors():
@@ -184,7 +184,7 @@ def test_auth_and_quota_failures_are_cli_errors():
 
 def test_missing_api_key_is_cli_error():
     _reset()
-    os.environ.pop("SQLVERIFY_API_KEY", None)
+    os.environ.pop("SKOLEM_API_KEY", None)
     with tempfile.TemporaryDirectory() as tmp:
         code, _, err = _run(_argv(_files(tmp)))
     assert code == cli.EXIT_CLI_ERROR, f"expected 2, got {code}"
@@ -283,7 +283,7 @@ def test_two_stdin_inputs_rejected():
 
 def test_payload_and_headers():
     _reset()
-    os.environ["SQLVERIFY_URL"] = "http://localhost:8000/"
+    os.environ["SKOLEM_URL"] = "http://localhost:8000/"
     with tempfile.TemporaryDirectory() as tmp:
         code, _, _ = _run(_argv(_files(tmp), "--output", "json", "--dialect", "postgres",
                                 "--bound", "4", "--timeout-ms", "30000",
@@ -294,9 +294,9 @@ def test_payload_and_headers():
     body = call["json"]
     assert body == {"ddl_sql": DDL, "sql_v1": Q1, "sql_v2": Q2, "dialect": "postgres",
                     "bound": 4, "timeout_ms": 30000, "project_id": "proj-1"}, body
-    assert call["headers"]["Authorization"] == "Bearer sqv_test_key"
+    assert call["headers"]["Authorization"] == "Bearer skm_test_key"
     # _resolve_surface() keys analytics off this prefix.
-    assert call["headers"]["User-Agent"].startswith("sqlverify-cli/"), call["headers"]
+    assert call["headers"]["User-Agent"].startswith("skolem-cli/"), call["headers"]
     # httpx must outlive the server's 120s solve ceiling.
     assert call["timeout"] > 120, call["timeout"]
 
@@ -311,8 +311,8 @@ def test_project_omitted_when_unset():
 def test_api_key_flag_overrides_env():
     _reset()
     with tempfile.TemporaryDirectory() as tmp:
-        _run(_argv(_files(tmp), "--output", "json", "--api-key", "sqv_flag"))
-    assert calls[0]["headers"]["Authorization"] == "Bearer sqv_flag"
+        _run(_argv(_files(tmp), "--output", "json", "--api-key", "skm_flag"))
+    assert calls[0]["headers"]["Authorization"] == "Bearer skm_flag"
 
 
 # ── Output renderers ─────────────────────────────────────────────────────────

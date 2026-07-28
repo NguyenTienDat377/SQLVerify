@@ -1,6 +1,6 @@
 # Two services from one blueprint (Render only auto-syncs a file named render.yaml):
-#   - sqlverify          → prod,    deploys from `main`
-#   - sqlverify-staging  → staging, deploys from `staging`
+#   - skolem          → prod,    deploys from `main`
+#   - skolem-staging  → staging, deploys from `staging`
 #
 # `sync: false` vars are NOT stored in the repo — enter them per-service in the
 # Render dashboard. Point staging at its OWN Supabase project + SITE_URL so it
@@ -10,7 +10,7 @@
 services:
   # ── Production ──────────────────────────────────────────────────────────
   - type: web
-    name: sqlverify
+    name: skolem
     runtime: docker
     region: singapore
     plan: starter
@@ -25,7 +25,7 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: SITE_URL # prod origin, e.g. https://sqlverify.com — drives HSTS/CORS/cookie-Secure
+      - key: SITE_URL # prod origin, e.g. https://skolem.dev — drives HSTS/CORS/cookie-Secure
         sync: false
       - key: SENTRY_DSN
         sync: false
@@ -36,7 +36,7 @@ services:
 
   # ── Staging ─────────────────────────────────────────────────────────────
   - type: web
-    name: sqlverify-staging
+    name: skolem-staging
     runtime: docker
     region: singapore
     plan: free
@@ -51,7 +51,7 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
-      - key: SITE_URL # staging origin, e.g. https://sqlverify-staging.onrender.com
+      - key: SITE_URL # staging origin, e.g. https://skolem-staging.onrender.com
         sync: false
       - key: SENTRY_DSN
         sync: false

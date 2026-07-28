@@ -1,6 +1,6 @@
-"""Self-healing SQL repair loop, driven by SQLVerify counterexamples.
+"""Self-healing SQL repair loop, driven by Skolem counterexamples.
 
-The idea: an AI agent proposes a rewritten query; SQLVerify either *proves* it
+The idea: an AI agent proposes a rewritten query; Skolem either *proves* it
 equivalent to the trusted original, or hands back a concrete counterexample
 database where they diverge. That counterexample is ground truth — not an
 opinion — so the agent can revise against a fact instead of a vibe, and the loop
@@ -15,10 +15,10 @@ has a decidable stop condition (`status == "equivalent"`).
                                   ▲                                     │
                                   └─────────────────────────────────────┘
 
-Run it (needs a reachable SQLVerify + a real API key):
+Run it (needs a reachable Skolem + a real API key):
 
-    SQLVERIFY_API_KEY=sqv_... \
-    SQLVERIFY_URL=http://localhost:8000 \
+    SKOLEM_API_KEY=skm_... \
+    SKOLEM_URL=http://localhost:8000 \
         python examples/repair_loop.py
 
 The `agent_revise` below is a TOY stand-in so the demo converges without an LLM.
@@ -30,17 +30,17 @@ import os
 
 import httpx
 
-BASE_URL = os.environ.get("SQLVERIFY_URL", "https://sqlverify.com").rstrip("/")
-API_KEY = os.environ.get("SQLVERIFY_API_KEY")
+BASE_URL = os.environ.get("SKOLEM_URL", "https://skolem.dev").rstrip("/")
+API_KEY = os.environ.get("SKOLEM_API_KEY")
 MAX_TRIES = 5
 
 
 class VerifyUnavailable(RuntimeError):
-    """SQLVerify could not be reached or refused the request — not a query verdict."""
+    """Skolem could not be reached or refused the request — not a query verdict."""
 
 
 async def verify(client: httpx.AsyncClient, ddl_sql: str, sql_v1: str, sql_v2: str) -> dict:
-    """One call to SQLVerify's JSON endpoint — the same contract the MCP tool proxies."""
+    """One call to Skolem's JSON endpoint — the same contract the MCP tool proxies."""
     try:
         resp = await client.post(
             f"{BASE_URL}/api/verify/text",
@@ -49,18 +49,18 @@ async def verify(client: httpx.AsyncClient, ddl_sql: str, sql_v1: str, sql_v2: s
         )
     except httpx.ConnectError as exc:
         raise VerifyUnavailable(
-            f"could not connect to SQLVerify at {BASE_URL} — is the server running? "
-            f"(start it with `uvicorn main:app --port 8000`, or set SQLVERIFY_URL)"
+            f"could not connect to Skolem at {BASE_URL} — is the server running? "
+            f"(start it with `uvicorn main:app --port 8000`, or set SKOLEM_URL)"
         ) from exc
     except httpx.HTTPError as exc:
         raise VerifyUnavailable(f"request to {BASE_URL} failed: {exc}") from exc
 
     if resp.status_code == 401:
-        raise VerifyUnavailable("SQLVerify rejected the API key (401) — check SQLVERIFY_API_KEY.")
+        raise VerifyUnavailable("Skolem rejected the API key (401) — check SKOLEM_API_KEY.")
     if resp.status_code == 402:
-        raise VerifyUnavailable("SQLVerify quota exhausted (402) for this key.")
+        raise VerifyUnavailable("Skolem quota exhausted (402) for this key.")
     if resp.status_code >= 400:
-        raise VerifyUnavailable(f"SQLVerify returned HTTP {resp.status_code}: {resp.text[:200]}")
+        raise VerifyUnavailable(f"Skolem returned HTTP {resp.status_code}: {resp.text[:200]}")
     return resp.json()
 
 
@@ -97,7 +97,7 @@ def agent_revise(candidate: str, counterexample: dict, v1_rows: list, v2_rows: l
 
 async def repair_loop(ddl_sql: str, trusted_v1: str, candidate: str) -> None:
     if not API_KEY:
-        raise SystemExit("Set SQLVERIFY_API_KEY (a sqv_ key from the SQLVerify UI).")
+        raise SystemExit("Set SKOLEM_API_KEY (a skm_ key from the Skolem UI).")
 
     async with httpx.AsyncClient(timeout=130) as client:
         for attempt in range(1, MAX_TRIES + 1):
@@ -132,7 +132,7 @@ async def repair_loop(ddl_sql: str, trusted_v1: str, candidate: str) -> None:
 if __name__ == "__main__":
     DDL = "CREATE TABLE users (id INT PRIMARY KEY, age INT, country TEXT);"
     TRUSTED = "SELECT id FROM users WHERE age >= 18 AND country = 'US'"
-    # Seeded bug: `> 18` wrongly excludes 18-year-olds. SQLVerify will produce a
+    # Seeded bug: `> 18` wrongly excludes 18-year-olds. Skolem will produce a
     # counterexample with an age-18 US user; the toy agent then repairs it.
     BROKEN = "SELECT id FROM users WHERE age > 18 AND country = 'US'"
 

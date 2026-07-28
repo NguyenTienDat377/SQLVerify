@@ -1,19 +1,19 @@
-# CLAUDE.md — SQLVerify
+# CLAUDE.md — Skolem
 
 A context file for Claude Code. Read this fully before touching any file.
 
 ---
 
-## What SQLVerify is
+## What Skolem is
 
-A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and two SQL queries (original vs AI-rewritten), SQLVerify uses Z3/SMT solving to either **prove they are semantically equivalent** or **produce a concrete counterexample database** where they diverge.
+A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and two SQL queries (original vs AI-rewritten), Skolem uses Z3/SMT solving to either **prove they are semantically equivalent** or **produce a concrete counterexample database** where they diverge.
 
 **Core value proposition:** Deterministic formal verification as an antidote to probabilistic AI output — proof that a query does what it's intended to do, not just that it runs.
 
 **Three delivery surfaces (same core engine):**
 
 - **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`, on-demand "Explain" button).
-- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results. Driven by the `sqlverify` CLI (`cli/`), which is also the intended engine of the planned GitHub Action.
+- **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), which always explains divergent results. Driven by the `skolem` CLI (`cli/`), which is also the intended engine of the planned GitHub Action.
 - **MCP tool** — AI coding agents (Claude Code/Desktop, Cursor, …) call verification *in-loop* via a thin stdio proxy (`mcp/`) that forwards to `POST /api/verify/text`. Enables the counterexample-driven self-healing loop: an agent proposes a rewrite, gets a proof or a concrete counterexample, and revises against ground truth until proven equivalent (`mcp/examples/repair_loop.py`).
 
 **Future function** - Check the queries if it fits business input via a box of users' expected
@@ -38,7 +38,7 @@ A formal verification tool for AI-generated SQL. Given a Flyway DDL schema and t
 ## Directory structure
 
 ```
-SQLVerify/
+Skolem/
 ├── main.py                         # FastAPI app entry point — routers, pinned CORS, rate-limit + JWT middleware,
 │                                   #   error handlers (404/500), public pages (/, /pricing, /docs, /integrations,
 │                                   #   /terms, /privacy, /robots.txt, /sitemap.xml), site_url Jinja global,
@@ -89,13 +89,13 @@ SQLVerify/
 │   └── middleware.py
 │
 ├── cli/                            # ✅ DONE (verify + diff) — CLI delivery surface (standalone; httpx is the only dep)
-│   ├── sqlverify_cli.py            #   argparse CLI: `sqlverify verify` / `sqlverify diff` → POST /api/verify/text
-│   ├── pyproject.toml              #   `pipx install ./cli` → `sqlverify` entry point (httpx only, never imports core/)
+│   ├── skolem_cli.py            #   argparse CLI: `skolem verify` / `skolem diff` → POST /api/verify/text
+│   ├── pyproject.toml              #   `pipx install ./cli` → `skolem` entry point (httpx only, never imports core/)
 │   ├── requirements.txt            #   httpx (NOT the app's deps)
 │   └── README.md                   #   install + flags + exit codes + output modes
 │
 ├── mcp/                            # ✅ DONE — MCP delivery surface (standalone; own .venv, only needs mcp+httpx)
-│   ├── sqlverify_mcp.py            #   FastMCP stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer sqv_ key)
+│   ├── skolem_mcp.py            #   FastMCP stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer skm_ key)
 │   ├── requirements.txt            #   mcp + httpx (NOT the app's deps)
 │   ├── README.md                   #   setup + Claude Code/Desktop connect + Inspector test
 │   └── examples/
@@ -180,15 +180,15 @@ SQLVerify/
   paths** and injects `request.state.user_id` (+ `user_email`, `auth_method`):
   - browser session — Supabase JWT (`sb-access-token` cookie or `Bearer <jwt>`),
     verified against Supabase JWKS with issuer + audience checks;
-  - CI/API client — per-user API key (`Bearer sqv_…` or `X-API-Key`), resolved via the
+  - CI/API client — per-user API key (`Bearer skm_…` or `X-API-Key`), resolved via the
     `api_keys` table with a ~60s per-process lookup cache.
 
 ### cli/
-- `sqlverify_cli.py` — `sqlverify verify --ddl X --v1 A --v2 B`: a thin argparse client over
+- `skolem_cli.py` — `skolem verify --ddl X --v1 A --v2 B`: a thin argparse client over
   `POST /api/verify/text`. Any input may be `-` (stdin; at most one). Mirrors the server's
   limits client-side (`bound` ≤ 6, `timeout_ms` ≤ 120000) so a typo costs no round trip.
-  Config via `SQLVERIFY_API_KEY` / `SQLVERIFY_URL` — **the same env names as `mcp/`**, one
-  setup for both surfaces. Sends a `sqlverify-cli/<v>` User-Agent so `_resolve_surface()`
+  Config via `SKOLEM_API_KEY` / `SKOLEM_URL` — **the same env names as `mcp/`**, one
+  setup for both surfaces. Sends a `skolem-cli/<v>` User-Agent so `_resolve_surface()`
   can tell CLI traffic from MCP traffic.
   - **Exit codes:** `0` policy pass, `1` policy fail, `2` the CLI's own failure (bad flags,
     unreadable file, network, 401/402/429). Transport failure is deliberately `2`, never
@@ -199,7 +199,7 @@ SQLVerify/
   - **`--output`** `auto` (human on a TTY, json when piped) | `human` | `json` (VerifyResponse
     verbatim) | `github` (one annotation; its level follows `--fail-on`, so the check's colour
     can't contradict the exit code).
-  - **`sqlverify diff --base REF --ddl PATH GLOB...`** — verifies every file matching `GLOB`
+  - **`skolem diff --base REF --ddl PATH GLOB...`** — verifies every file matching `GLOB`
     that changed since `--base` (working-tree version vs. the version at `git merge-base
     --base HEAD`), so the same command gives the same answer locally on a dirty tree and in
     CI after checkout. `--ddl` accepts a file, a directory, or a glob; a directory concatenates
@@ -217,7 +217,7 @@ SQLVerify/
     from git's diff alone. Rather than guess at pairing (risking a false comparison between
     unrelated queries), `diff` prints one explicit `WARNING` whenever an add and a delete
     co-occur, naming both files, so the gap is never silent — see `_undetected_rename_warning`.
-- `pyproject.toml` — `pipx install ./cli` → `sqlverify`. httpx is the only dependency; the
+- `pyproject.toml` — `pipx install ./cli` → `skolem`. httpx is the only dependency; the
   CLI must **never** import `core/`, or installing it would drag in Z3.
 
 ### db/
@@ -238,7 +238,7 @@ SQLVerify/
 - `keys.html` — API key management (create form + list)
 - `projects.html` — project management (create form + list + delete)
 - `terms.html` / `privacy.html` — legal pages, served by public `GET /terms` and `GET /privacy` in `main.py` (in the `JWTMiddleware` public allowlist); linked from the `base.html` footer
-- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://sqlverify.com`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing` and points at the sitemap, which lists the six public pages (`/`, `/pricing`, `/docs`, `/integrations`, `/terms`, `/privacy`). **`/docs` and `/openapi.json` are deliberately NOT disallowed:** every `Disallow` is a prefix match, so a `Disallow: /docs` line would silently block the whole `/docs/*` documentation tree the moment it grows a second page — and it never secured anything anyway (robots.txt is a request, not access control; the OpenAPI schema is kept private by `ENABLE_DOCS` being unset in prod, a real 404).
+- **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://skolem.dev`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing` and points at the sitemap, which lists the six public pages (`/`, `/pricing`, `/docs`, `/integrations`, `/terms`, `/privacy`). The sitemap carries **`<lastmod>` only — no `<priority>`/`<changefreq>`**, which Google ignores. `_SITEMAP_PAGES` in `main.py` holds the dates and they are **hand-maintained**: bump one only when that page's content actually changes. Never derive them from mtime or `git log` — `.dockerignore` excludes `.git/` and Render builds from a fresh clone, so both would stamp every page with the deploy date and train Google to discount `lastmod` site-wide. **`/docs` and `/openapi.json` are deliberately NOT disallowed:** every `Disallow` is a prefix match, so a `Disallow: /docs` line would silently block the whole `/docs/*` documentation tree the moment it grows a second page — and it never secured anything anyway (robots.txt is a request, not access control; the OpenAPI schema is kept private by `ENABLE_DOCS` being unset in prod, a real 404).
 - `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
 - `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
 - `partials/api_keys.html` — key list + the show-once raw-key banner
@@ -264,7 +264,7 @@ branch changed, derived from git — see the `cli/` DONE section above). The
 `migrations/` directory (silently dropping every ALTER TABLE) is fixed —
 `core/ddl_parser.py` now folds ALTER TABLE and fails closed on anything
 outside the supported subset. What's left is the Action itself: a Docker
-action wrapping the CLI (`sqlverify diff --output github --fail-on …`), not a
+action wrapping the CLI (`skolem diff --output github --fail-on …`), not a
 reimplementation. Design questions still open: how a PR's changed-file list
 maps to `GLOB` (a repo-configurable input, most likely), and whether the
 LLM `explain_result()` call should default off for this surface per the
@@ -287,10 +287,13 @@ All suites are standalone (no pytest required, but pytest-compatible):
   INNER joins, left-deep outer-join chains mixing INNER/LEFT/RIGHT/FULL, join
   reordering, GROUP BY on any joined table's column) and fail-closed rejection
   of unsupported constructs.
-- `tests/paper_cases_test.py` — 21 regression tests from the VeriEQL paper
+- `tests/paper_cases_test.py` — 22 regression tests from the VeriEQL paper
   (`docs/references/veriEQL-2024.pdf`): IC-PK composite keys, IC-FK/IC-NN
   equivalences, three-valued logic, NULL aggregation, GROUP BY NULL-key Dedup,
-  bag multiplicity, plus multi-table-join chains.
+  bag multiplicity, plus multi-table-join chains. Also guards the sqlglot AST
+  contract for `IS NOT NULL` (`test_is_not_null_is_not_silently_inverted`) —
+  sqlglot 30.13 moved it from `Not(Is(...))` to `Is(..., negate=True)`, and
+  reading the AST for only one shape silently inverted the predicate.
 - `tests/differential_test.py` — differential fuzzing: random query pairs
   (incl. 2-join `t1⋈t2⋈t3` chains, each level independently INNER/LEFT/RIGHT/
   FULL, plus chain-growing/shrinking mutations) verified by Z3, then
@@ -299,10 +302,10 @@ All suites are standalone (no pytest required, but pytest-compatible):
   `--seeds N --bound B`.
 - `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeout
   defaults/clamp, persistence, divergent explain) with Supabase/LLM stubbed.
-- `tests/cli_verify_test.py` — 24 tests for `sqlverify verify` with the transport
+- `tests/cli_verify_test.py` — 24 tests for `skolem verify` with the transport
   stubbed: the exit-code policy (0/1/2, `--fail-on`), client-side flag validation,
   file/stdin reading, request payload + User-Agent, and the three renderers.
-- `tests/cli_diff_test.py` — 17 tests for `sqlverify diff` against real throwaway
+- `tests/cli_diff_test.py` — 17 tests for `skolem diff` against real throwaway
   git repos (only the HTTP transport is stubbed): pair discovery for
   modified/added/deleted files, the undetected-rename warning, the DDL-changed
   guard, Flyway version ordering, and worst-of exit-code aggregation.
@@ -311,7 +314,7 @@ All suites are standalone (no pytest required, but pytest-compatible):
   CREATE VIEW / ALTER COLUMN TYPE / DROP CONSTRAINT / DML / ALTER-before-CREATE
   all raising `ValueError`).
 - `tests/api_keys_test.py` — key hashing + the dual auth path (session JWT vs
-  `sqv_` API key) + magic-link OTP call.
+  `skm_` API key) + magic-link OTP call.
 - `tests/circuit_breaker_test.py` — the explainer circuit breaker (trips, short-
   circuits, half-open recovery).
 - `tests/billing_test.py` — free-tier quota gate, checkout redirect, portal,
@@ -383,7 +386,7 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude # claude | openai | google
-SITE_URL=                 # full origin, e.g. https://sqlverify.com (no trailing slash) — used by auth redirects + CORS
+SITE_URL=                 # full origin, e.g. https://skolem.dev (no trailing slash) — used by auth redirects + CORS
 ENABLE_DOCS=              # optional — set "true" to serve the Swagger console at /api-docs, /api-redoc, /openapi.json; unset (default) 404s them in prod. NOT /docs — that's the public docs page.
 POSTHOG_API_KEY=          # optional — PostHog project key; unset disables analytics entirely (no-op)
 POSTHOG_HOST=             # optional — https://us.i.posthog.com (default) | https://eu.i.posthog.com
@@ -485,7 +488,7 @@ RLS is enabled. The service key in `db/client.py` bypasses RLS for server-side w
 ## Migration #2
 
 Per-user API keys for the CI/CD auth path. Only the sha256 **hash** is stored;
-the raw `sqv_…` key is shown once at creation. Server lookups use the service
+the raw `skm_…` key is shown once at creation. Server lookups use the service
 key (RLS-bypassing) so `resolve_api_key()` can match a hash across all users.
 
 ```sql
@@ -526,7 +529,7 @@ to call Supabase's OTP endpoint.
 
 ## Migration #3
 
-Link Lemon Squeezy subscriptions to a SQLVerify user so plan/quota resolve by
+Link Lemon Squeezy subscriptions to a Skolem user so plan/quota resolve by
 `user_id`. The in-app checkout (`/billing/checkout`) passes `user_id` as LS
 checkout custom data; the webhook stores it.
 

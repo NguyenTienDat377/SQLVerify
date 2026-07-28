@@ -1,4 +1,4 @@
-# SQLVerify
+# Skolem
 
 **Formal verification for AI-generated SQL — catch semantic bugs before they reach production.**
 
@@ -8,20 +8,20 @@
 
 ---
 
-## What is SQLVerify?
+## What is Skolem?
 
-LLMs generate SQL that _looks_ correct. SQLVerify proves whether it _is_ correct.
+LLMs generate SQL that _looks_ correct. Skolem proves whether it _is_ correct.
 
 Given a Flyway DDL schema and two SQL queries (e.g. an original and an AI-rewritten version), it uses **Z3 SMT solving** to either:
 
 - **Prove the two queries are semantically equivalent** — not just syntactically similar, but guaranteed to return the same results on any valid database within the search bound
 - **Find the exact counterexample that breaks them** — a concrete counterexample database showing precisely where and why they diverge
 
-This is formal, deterministic verification. Not probabilistic checking. Not linting. If SQLVerify says two queries are equivalent, they are (within the documented bound and SQL subset).
+This is formal, deterministic verification. Not probabilistic checking. Not linting. If Skolem says two queries are equivalent, they are (within the documented bound and SQL subset).
 
 ```
 You paste:   AI-generated SQL + your DDL schema
-SQLVerify:   Either proves equivalence ✅
+Skolem:   Either proves equivalence ✅
              Or shows you the exact input rows that expose the bug ❌
 ```
 
@@ -31,13 +31,13 @@ SQLVerify:   Either proves equivalence ✅
 
 AI coding tools now generate SQL in production pipelines. The problem: LLMs are probabilistic — they produce plausible-looking output, not guaranteed-correct output. SQL bugs are binary — a wrong JOIN either loses rows or duplicates them. There's no "mostly correct."
 
-SQLVerify is the missing guardrail between AI-generated SQL and your production database.
+Skolem is the missing guardrail between AI-generated SQL and your production database.
 
 ---
 
 ## Three delivery surfaces, one engine
 
-The same Z3 core powers three ways to use SQLVerify:
+The same Z3 core powers three ways to use Skolem:
 
 - **Web tool** — backend engineers reviewing AI-generated SQL before it ships, via the HTMX UI (`POST /api/verify`) with an on-demand **Explain** button. Snappy timeout (default 15s).
 - **CI/CD tool** — automated SQL validation in pipelines and AI-agent loops, via the JSON endpoint (`POST /api/verify/text`), authenticated with a per-user API key and always explaining divergent results. Verdict-favouring timeout (default 60s).
@@ -49,8 +49,8 @@ The same Z3 core powers three ways to use SQLVerify:
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/sqlverify.git
-cd sqlverify
+git clone https://github.com/yourusername/skolem.git
+cd skolem
 
 # Set up environment
 python -m venv .venv
@@ -77,7 +77,7 @@ SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_KEY=
 EXPLAINER_PROVIDER=claude        # claude | openai | google
-SITE_URL=                        # full origin, e.g. https://sqlverify.com (no trailing slash) — auth redirects + CORS
+SITE_URL=                        # full origin, e.g. https://skolem.dev (no trailing slash) — auth redirects + CORS
 
 # Billing (Lemon Squeezy — Merchant of Record)
 LEMONSQUEEZY_WEBHOOK_SECRET=     # HMAC signing secret (Settings → Webhooks)
@@ -95,10 +95,10 @@ Config is read via `os.getenv` per-module — there is no `config.py`. All of th
 
 ## Architecture
 
-SQLVerify is a **modular monolith** — clear separation of concerns, no microservices complexity.
+Skolem is a **modular monolith** — clear separation of concerns, no microservices complexity.
 
 ```
-sqlverify/
+skolem/
 │
 ├── main.py                  # FastAPI entry: routers, pinned CORS, rate-limit + JWT middleware,
 │                            #   error handlers (404/500), public pages (/, /pricing, /terms,
@@ -135,7 +135,7 @@ sqlverify/
 │   └── repositories/        # verification_runs, subscriptions, api_keys, projects
 │
 ├── mcp/                     # MCP surface — standalone stdio proxy (own .venv; only needs mcp+httpx)
-│   ├── sqlverify_mcp.py     # FastMCP server: tool verify_sql_equivalence() → POST /api/verify/text
+│   ├── skolem_mcp.py     # FastMCP server: tool verify_sql_equivalence() → POST /api/verify/text
 │   └── examples/            # repair_loop.py — counterexample-driven self-healing agent loop
 │
 └── web/                     # Jinja2 + HTMX frontend
@@ -274,7 +274,7 @@ All suites are standalone (pytest-compatible but no pytest required): `.venv/bin
 
 **Scale** — Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache, shared-state rate-limiter/breaker, poison-job watchdog (see the scaling roadmap), PostHog.
 
-**AI Agent Guardrails** — for self-healing AI agents. Foundations shipped: the MCP surface ([`mcp/`](mcp/)) and a counterexample-driven repair-loop demo ([`mcp/examples/repair_loop.py`](mcp/examples/repair_loop.py)). Next: a published `sqlverify-mcp` package and a hosted (remote) MCP server so agents connect without a local install.
+**AI Agent Guardrails** — for self-healing AI agents. Foundations shipped: the MCP surface ([`mcp/`](mcp/)) and a counterexample-driven repair-loop demo ([`mcp/examples/repair_loop.py`](mcp/examples/repair_loop.py)). Next: a published `skolem-mcp` package and a hosted (remote) MCP server so agents connect without a local install.
 
 ---
 
@@ -282,7 +282,7 @@ All suites are standalone (pytest-compatible but no pytest required): `.venv/bin
 
 GNU Affero General Public License v3.0 — see [LICENSE](LICENSE).
 
-This means: if you run SQLVerify as a network service, you must make your modifications open source under the same license. Commercial license available for teams that need different terms.
+This means: if you run Skolem as a network service, you must make your modifications open source under the same license. Commercial license available for teams that need different terms.
 
 ---
 
@@ -292,4 +292,4 @@ Issues and PRs are welcome. If you're fixing a bug in the Z3 encoding layer (`co
 
 ## Acknowledgments
 
-SQLVerify's verification engine is built on academic research — see [NOTICE.md](NOTICE.md) for citations and licensing.
+Skolem's verification engine is built on academic research — see [NOTICE.md](NOTICE.md) for citations and licensing.

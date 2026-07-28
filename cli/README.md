@@ -1,14 +1,14 @@
-# SQLVerify CLI
+# Skolem CLI
 
 Formally prove that a rewritten SQL query is equivalent to the original — or get
 a concrete counterexample database where they differ — from a terminal or a CI
 pipeline.
 
-It holds no Z3 solver. It forwards each call to a running SQLVerify's
-`POST /api/verify/text`, authenticated with a per-user `sqv_` API key. The engine
+It holds no Z3 solver. It forwards each call to a running Skolem's
+`POST /api/verify/text`, authenticated with a per-user `skm_` API key. The engine
 stays on the server; this client runs wherever you do.
 
-This lives inside the SQLVerify repo (versioned with the API contract it calls)
+This lives inside the Skolem repo (versioned with the API contract it calls)
 but is self-contained — `httpx` is its only dependency, so installing it never
 drags in Z3.
 
@@ -16,14 +16,14 @@ drags in Z3.
 
 ```bash
 pipx install ./cli          # or: pip install ./cli
-sqlverify --version
+skolem --version
 ```
 
-Mint a `sqv_…` key in the SQLVerify UI (**Keys** page), then:
+Mint a `skm_…` key in the Skolem UI (**Keys** page), then:
 
 ```bash
-export SQLVERIFY_API_KEY=sqv_...
-export SQLVERIFY_URL=https://sqlverify.com   # optional; this is the default
+export SKOLEM_API_KEY=skm_...
+export SKOLEM_URL=https://skolem.dev   # optional; this is the default
 ```
 
 Both have flag equivalents (`--api-key`, `--url`). The env names match the
@@ -34,13 +34,13 @@ Both have flag equivalents (`--api-key`, `--url`). The env names match the
 ### `verify` — one explicit pair
 
 ```bash
-sqlverify verify --ddl schema.sql --v1 before.sql --v2 after.sql
+skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
 ```
 
 Any input may be `-` to read from stdin (at most one):
 
 ```bash
-git show HEAD~1:queries/report.sql | sqlverify verify --ddl schema.sql --v1 - --v2 queries/report.sql
+git show HEAD~1:queries/report.sql | skolem verify --ddl schema.sql --v1 - --v2 queries/report.sql
 ```
 
 | flag | meaning |
@@ -52,7 +52,7 @@ git show HEAD~1:queries/report.sql | sqlverify verify --ddl schema.sql --v1 - --
 ### `diff` — every query a branch actually changed
 
 ```bash
-sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'
+skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'
 ```
 
 For each file matching a glob that changed since `--base`, verifies the
@@ -88,7 +88,7 @@ change into separate commits.
 | `--dialect` | SQL dialect for parsing (default `generic`) |
 | `--bound` | max rows per table Z3 explores, 1–6 (default 3) |
 | `--timeout-ms` | solver timeout (default 60000, max 120000) |
-| `--project` | tag the run with a SQLVerify project id |
+| `--project` | tag the run with a Skolem project id |
 | `--output` | `auto` (default) \| `human` \| `json` \| `github` |
 | `--fail-on` | statuses that exit 1 (default `divergent`; `diff` also accepts `ddl-changed`) |
 
@@ -108,7 +108,7 @@ but pass. That default is about adoption — a check that goes red the first tim
 someone writes a CTE gets uninstalled. For a strict gate:
 
 ```bash
-sqlverify verify ... --fail-on divergent,unknown,error
+skolem verify ... --fail-on divergent,unknown,error
 ```
 
 Note that `unknown` means the solver timed out. It is **not** a proof of
@@ -119,10 +119,10 @@ equivalence — the CLI says so on every `unknown`, whichever way you gate it.
 `auto` prints `human` to a terminal and `json` when piped, so this works:
 
 ```bash
-sqlverify verify --ddl schema.sql --v1 a.sql --v2 b.sql | jq .counterexample_db
+skolem verify --ddl schema.sql --v1 a.sql --v2 b.sql | jq .counterexample_db
 ```
 
-`json` is SQLVerify's `VerifyResponse` verbatim — see the
+`json` is Skolem's `VerifyResponse` verbatim — see the
 [MCP README](../mcp/README.md#exposed-tool) for the field table.
 
 `github` emits a single GitHub Actions annotation whose level follows your

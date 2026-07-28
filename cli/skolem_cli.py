@@ -1,13 +1,13 @@
-"""SQLVerify CLI — a thin HTTP client.
+"""Skolem CLI — a thin HTTP client.
 
 Formally proves whether two SQL SELECT queries are semantically equivalent, or
 prints a concrete counterexample database where they diverge.
 
-It holds no solver: it forwards to a hosted SQLVerify's POST /api/verify/text,
-authenticated with a per-user `sqv_` API key. Only dependency is httpx — never
-import `core/` here, or `pipx install sqlverify` would drag in Z3.
+It holds no solver: it forwards to a hosted Skolem's POST /api/verify/text,
+authenticated with a per-user `skm_` API key. Only dependency is httpx — never
+import `core/` here, or `pipx install skolem` would drag in Z3.
 
-    sqlverify verify --ddl schema.sql --v1 before.sql --v2 after.sql
+    skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
 """
 import argparse
 import fnmatch
@@ -22,16 +22,16 @@ import httpx
 
 __version__ = "0.1.0"
 
-# Where the hosted SQLVerify lives. Override for local dev (http://localhost:8000).
-DEFAULT_URL = "https://sqlverify.com"
+# Where the hosted Skolem lives. Override for local dev (http://localhost:8000).
+DEFAULT_URL = "https://skolem.dev"
 
 # Identifies CLI traffic to the server. /api/verify/text is shared by the CLI,
 # the MCP proxy and raw pipeline clients; this User-Agent is what lets
 # api/verify.py:_resolve_surface tell them apart. Analytics-only — it never
 # affects auth, quota, or the verdict.
-_USER_AGENT = f"sqlverify-cli/{__version__}"
+_USER_AGENT = f"skolem-cli/{__version__}"
 
-# Must sit above SQLVerify's CI solve ceiling (120s) plus transport slack.
+# Must sit above Skolem's CI solve ceiling (120s) plus transport slack.
 _HTTP_TIMEOUT_S = 130.0
 
 # Exit codes. A verification verdict you asked to fail on (1) is kept distinct
@@ -147,33 +147,33 @@ def post_verify(url, api_key, payload):
             timeout=_HTTP_TIMEOUT_S,
         )
     except httpx.HTTPError as exc:
-        raise CliError(f"Could not reach SQLVerify at {url}: {exc}")
+        raise CliError(f"Could not reach Skolem at {url}: {exc}")
 
     if resp.status_code == 401:
         raise CliError(
-            "SQLVerify rejected the API key (401). Check SQLVERIFY_API_KEY or --api-key."
+            "Skolem rejected the API key (401). Check SKOLEM_API_KEY or --api-key."
         )
     if resp.status_code == 402:
         raise CliError(
-            "SQLVerify free-tier monthly quota exhausted for this API key. "
+            "Skolem free-tier monthly quota exhausted for this API key. "
             "Upgrade the plan or wait for the next UTC calendar month."
         )
     if resp.status_code == 429:
-        raise CliError("SQLVerify rate limit hit (429). Slow down and retry shortly.")
+        raise CliError("Skolem rate limit hit (429). Slow down and retry shortly.")
     if resp.status_code >= 400:
         detail = ""
         try:
             detail = resp.json().get("detail", "")
         except ValueError:
             detail = resp.text[:200]
-        raise CliError(f"SQLVerify returned HTTP {resp.status_code}: {detail}")
+        raise CliError(f"Skolem returned HTTP {resp.status_code}: {detail}")
 
     try:
         return resp.json()
     except ValueError:
         raise CliError(
-            f"SQLVerify returned a non-JSON body (HTTP {resp.status_code}). "
-            f"Is {url} really a SQLVerify instance?"
+            f"Skolem returned a non-JSON body (HTTP {resp.status_code}). "
+            f"Is {url} really a Skolem instance?"
         )
 
 
@@ -278,11 +278,11 @@ def cmd_verify(args):
     _validate_bound_and_timeout(args.bound, args.timeout_ms)
     fail_on = _parse_fail_on(args.fail_on)
 
-    api_key = args.api_key or os.environ.get("SQLVERIFY_API_KEY")
+    api_key = args.api_key or os.environ.get("SKOLEM_API_KEY")
     if not api_key:
         raise CliError(
-            "No API key. Mint one in the SQLVerify UI (Keys page), then set "
-            "SQLVERIFY_API_KEY or pass --api-key."
+            "No API key. Mint one in the Skolem UI (Keys page), then set "
+            "SKOLEM_API_KEY or pass --api-key."
         )
 
     claimed = []
@@ -297,7 +297,7 @@ def cmd_verify(args):
     if args.project:
         payload["project_id"] = args.project
 
-    url = (args.url or os.environ.get("SQLVERIFY_URL") or DEFAULT_URL).rstrip("/")
+    url = (args.url or os.environ.get("SKOLEM_URL") or DEFAULT_URL).rstrip("/")
     resp = post_verify(url, api_key, payload)
 
     status = resp.get("status", "error")
@@ -487,13 +487,13 @@ def cmd_diff(args):
     _validate_bound_and_timeout(args.bound, args.timeout_ms)
     fail_on = _parse_fail_on(args.fail_on, valid_statuses=ALL_STATUSES + (DDL_CHANGED,))
 
-    api_key = args.api_key or os.environ.get("SQLVERIFY_API_KEY")
+    api_key = args.api_key or os.environ.get("SKOLEM_API_KEY")
     if not api_key:
         raise CliError(
-            "No API key. Mint one in the SQLVerify UI (Keys page), then set "
-            "SQLVERIFY_API_KEY or pass --api-key."
+            "No API key. Mint one in the Skolem UI (Keys page), then set "
+            "SKOLEM_API_KEY or pass --api-key."
         )
-    url = (args.url or os.environ.get("SQLVERIFY_URL") or DEFAULT_URL).rstrip("/")
+    url = (args.url or os.environ.get("SKOLEM_URL") or DEFAULT_URL).rstrip("/")
 
     merge_base = _git(["merge-base", args.base, "HEAD"]).strip()
     ddl_paths = _resolve_ddl_paths(args.ddl)
@@ -504,22 +504,22 @@ def cmd_diff(args):
                "tree — skipping all pairs. A query's meaning can't be checked across "
                "a schema change; the engine takes one schema for both queries.")
         if DDL_CHANGED in fail_on:
-            print(f"sqlverify: {msg}", file=sys.stderr)
+            print(f"skolem: {msg}", file=sys.stderr)
             return EXIT_FAIL
-        print(f"sqlverify: {msg} (not failing the run — pass --fail-on ddl-changed "
+        print(f"skolem: {msg} (not failing the run — pass --fail-on ddl-changed "
               "for a strict gate)", file=sys.stderr)
         return EXIT_PASS
 
     targets, skipped = _discover_pairs(merge_base, args.globs)
     for path, reason, _kind in skipped:
-        print(f"sqlverify: skip {path}: {reason}", file=sys.stderr)
+        print(f"skolem: skip {path}: {reason}", file=sys.stderr)
     rename_warning = _undetected_rename_warning(skipped)
     if rename_warning:
-        print(f"sqlverify: WARNING: {rename_warning}", file=sys.stderr)
+        print(f"skolem: WARNING: {rename_warning}", file=sys.stderr)
 
     if not targets:
         if not skipped:
-            print("sqlverify: no changed files matched.", file=sys.stderr)
+            print("skolem: no changed files matched.", file=sys.stderr)
         return EXIT_PASS
 
     output = args.output
@@ -538,7 +538,7 @@ def cmd_diff(args):
         try:
             resp = post_verify(url, api_key, payload)
         except CliError as exc:
-            print(f"sqlverify: {path}: {exc}", file=sys.stderr)
+            print(f"skolem: {path}: {exc}", file=sys.stderr)
             worst = EXIT_CLI_ERROR
             continue
 
@@ -581,17 +581,17 @@ def _add_common_flags(parser, fail_on_help):
     parser.add_argument("--fail-on", default=DEFAULT_FAIL_ON, dest="fail_on", metavar="STATUSES",
                         help=fail_on_help)
     parser.add_argument("--url", metavar="URL",
-                        help=f"SQLVerify base URL (env: SQLVERIFY_URL, default: {DEFAULT_URL}).")
+                        help=f"Skolem base URL (env: SKOLEM_URL, default: {DEFAULT_URL}).")
     parser.add_argument("--api-key", metavar="KEY", dest="api_key",
-                        help="Per-user sqv_ API key (env: SQLVERIFY_API_KEY).")
+                        help="Per-user skm_ API key (env: SKOLEM_API_KEY).")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="sqlverify",
+        prog="skolem",
         description="Formally verify that two SQL queries are semantically equivalent.",
     )
-    parser.add_argument("--version", action="version", version=f"sqlverify {__version__}")
+    parser.add_argument("--version", action="version", version=f"skolem {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     v = sub.add_parser(
@@ -642,10 +642,10 @@ def main(argv=None):
     try:
         return args.func(args)
     except CliError as exc:
-        print(f"sqlverify: {exc}", file=sys.stderr)
+        print(f"skolem: {exc}", file=sys.stderr)
         return EXIT_CLI_ERROR
     except KeyboardInterrupt:
-        print("sqlverify: interrupted.", file=sys.stderr)
+        print("skolem: interrupted.", file=sys.stderr)
         return EXIT_CLI_ERROR
 
 

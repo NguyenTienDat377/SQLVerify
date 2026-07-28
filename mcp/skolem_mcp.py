@@ -1,12 +1,12 @@
-"""SQLVerify MCP server — a thin stdio proxy.
+"""Skolem MCP server — a thin stdio proxy.
 
-Exposes SQLVerify's formal SQL-equivalence engine as an MCP tool that AI agents
+Exposes Skolem's formal SQL-equivalence engine as an MCP tool that AI agents
 (Claude Code, Claude Desktop, Cursor, etc.) can call in-loop. It holds no solver
-itself: it forwards to a hosted SQLVerify instance's POST /api/verify/text
-endpoint, authenticated with the user's per-user `sqv_` API key.
+itself: it forwards to a hosted Skolem instance's POST /api/verify/text
+endpoint, authenticated with the user's per-user `skm_` API key.
 
 Run locally over stdio:
-    SQLVERIFY_API_KEY=sqv_... python sqlverify_mcp.py
+    SKOLEM_API_KEY=skm_... python skolem_mcp.py
 
 Or point the MCP client's command at this file (see README.md).
 """
@@ -15,24 +15,24 @@ import os
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-# Where the hosted SQLVerify lives. Override for local dev (http://localhost:8000).
-BASE_URL = os.environ.get("SQLVERIFY_URL", "https://sqlverify.com").rstrip("/")
+# Where the hosted Skolem lives. Override for local dev (http://localhost:8000).
+BASE_URL = os.environ.get("SKOLEM_URL", "https://skolem.dev").rstrip("/")
 
-# A per-user API key minted in the SQLVerify UI (Keys page). Required — the
+# A per-user API key minted in the Skolem UI (Keys page). Required — the
 # endpoint is metered against this user's quota, so we fail fast without one.
-API_KEY = os.environ.get("SQLVERIFY_API_KEY")
+API_KEY = os.environ.get("SKOLEM_API_KEY")
 
-# httpx timeout must sit above SQLVerify's CI ceiling (120s solve) plus slack.
+# httpx timeout must sit above Skolem's CI ceiling (120s solve) plus slack.
 _HTTP_TIMEOUT_S = 130.0
 
 # Identifies agent traffic to the server. /api/verify/text is shared with CI/CD
-# clients, so this User-Agent is the only thing that lets SQLVerify tell in-loop
+# clients, so this User-Agent is the only thing that lets Skolem tell in-loop
 # AI-agent calls apart from pipeline calls (see api/verify.py:_resolve_surface).
 # Analytics-only — it never affects auth, quota, or the verdict.
 _VERSION = "0.1.0"
-_USER_AGENT = f"sqlverify-mcp/{_VERSION}"
+_USER_AGENT = f"skolem-mcp/{_VERSION}"
 
-mcp = FastMCP("sqlverify")
+mcp = FastMCP("skolem")
 
 
 @mcp.tool()
@@ -49,7 +49,7 @@ async def verify_sql_equivalence(
     it: unlike running the query, this proves the rewrite preserves meaning, or
     returns a concrete counterexample database where the two queries diverge.
 
-    Returns the raw SQLVerify result JSON:
+    Returns the raw Skolem result JSON:
       - status: "equivalent" | "divergent" | "unknown" | "error"
           equivalent → the rewrite is safe (within the bound).
           divergent  → they differ; see counterexample_db + the query outputs.
@@ -79,9 +79,9 @@ async def verify_sql_equivalence(
         return {
             "status": "error",
             "error_message": (
-                "SQLVERIFY_API_KEY is not set. Mint a key in the SQLVerify UI "
+                "SKOLEM_API_KEY is not set. Mint a key in the Skolem UI "
                 "(Keys page) and pass it to this MCP server via the "
-                "SQLVERIFY_API_KEY environment variable."
+                "SKOLEM_API_KEY environment variable."
             ),
         }
 
@@ -97,30 +97,30 @@ async def verify_sql_equivalence(
                 json=payload,
             )
     except httpx.HTTPError as exc:
-        # Network/transport failure reaching SQLVerify — surface it as a tool
+        # Network/transport failure reaching Skolem — surface it as a tool
         # error rather than raising, so the agent gets an actionable message.
         return {
             "status": "error",
-            "error_message": f"Could not reach SQLVerify at {BASE_URL}: {exc}",
+            "error_message": f"Could not reach Skolem at {BASE_URL}: {exc}",
         }
 
     if resp.status_code == 402:
         return {
             "status": "error",
             "error_message": (
-                "SQLVerify free-tier monthly quota exhausted for this API key. "
+                "Skolem free-tier monthly quota exhausted for this API key. "
                 "Upgrade the plan or wait for the next UTC calendar month."
             ),
         }
     if resp.status_code == 401:
         return {
             "status": "error",
-            "error_message": "SQLVerify rejected the API key (401). Check SQLVERIFY_API_KEY.",
+            "error_message": "Skolem rejected the API key (401). Check SKOLEM_API_KEY.",
         }
     if resp.status_code == 429:
         return {
             "status": "error",
-            "error_message": "SQLVerify rate limit hit (429). Slow down and retry shortly.",
+            "error_message": "Skolem rate limit hit (429). Slow down and retry shortly.",
         }
 
     try:
@@ -128,7 +128,7 @@ async def verify_sql_equivalence(
     except httpx.HTTPStatusError as exc:
         return {
             "status": "error",
-            "error_message": f"SQLVerify returned HTTP {resp.status_code}: {exc}",
+            "error_message": f"Skolem returned HTTP {resp.status_code}: {exc}",
         }
 
     return resp.json()  # VerifyResponse, verbatim

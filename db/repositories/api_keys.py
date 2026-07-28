@@ -5,7 +5,7 @@ Data access layer for the api_keys table — long-lived, per-user API keys for
 CI/CD clients (the second auth path alongside browser sessions).
 
 Security model:
-  - The raw key (`sqv_<token>`) is shown to the user exactly ONCE, at creation.
+  - The raw key (`skm_<token>`) is shown to the user exactly ONCE, at creation.
   - Only its SHA-256 hash is stored. A 256-bit random token has no low-entropy
     structure to brute-force, so a plain hash (not bcrypt/argon2) is the correct
     and fast choice for verification on every request.
@@ -28,7 +28,7 @@ from loguru import logger
 
 from db.client import get_client
 
-KEY_PREFIX = "sqv_"          # identifies our keys in an Authorization header
+KEY_PREFIX = "skm_"          # identifies our keys in an Authorization header
 _DISPLAY_CHARS = 12          # how much of the raw key to keep for display
 
 
@@ -39,7 +39,7 @@ def _hash(raw_key: str) -> str:
 
 
 def generate_raw_key() -> str:
-    """A fresh, URL-safe API key: `sqv_` + 256 bits of randomness."""
+    """A fresh, URL-safe API key: `skm_` + 256 bits of randomness."""
     return KEY_PREFIX + secrets.token_urlsafe(32)
 
 

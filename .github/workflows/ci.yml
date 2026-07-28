@@ -93,7 +93,7 @@ jobs:
                 {\"name\": \"📝 Commit\", \"value\": \"[\`$SHORT_SHA\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\", \"inline\": false},
                 {\"name\": \"👤 Author\", \"value\": \"${{ github.actor }}\", \"inline\": true}
               ],
-              \"footer\": {\"text\": \"SQLVerify CI • ${{ github.repository }}\"}
+              \"footer\": {\"text\": \"Skolem CI • ${{ github.repository }}\"}
             }]
           }" \
           "$DISCORD_WEBHOOK"

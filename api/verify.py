@@ -155,13 +155,13 @@ def _resolve_surface(request: Request) -> str:
 
     Both the CI/CD clients and the MCP proxy POST to /api/verify/text, so the
     endpoint alone can't tell pipeline traffic from AI-agent traffic. The MCP
-    server identifies itself via User-Agent (see mcp/sqlverify_mcp.py); anything
+    server identifies itself via User-Agent (see mcp/skolem_mcp.py); anything
     else is treated as a pipeline client. Analytics-only — this never affects
     auth, quota, or the verdict, so a spoofed UA costs nothing but a mislabelled
     event.
     """
     ua = (request.headers.get("user-agent") or "").lower()
-    return "mcp" if ua.startswith("sqlverify-mcp/") else "ci"
+    return "mcp" if ua.startswith("skolem-mcp/") else "ci"
 
 
 async def _resolve_project_id(user_id: Optional[str], project_id: Optional[str]) -> Optional[str]:

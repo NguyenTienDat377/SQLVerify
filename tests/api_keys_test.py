@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Env that import paths / routes read (no real services are contacted).
 os.environ.setdefault("SUPABASE_URL", "https://demo.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "anon-key-xyz")
-os.environ.setdefault("SITE_URL", "https://sqlverify.test")
+os.environ.setdefault("SITE_URL", "https://skolem.test")
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -38,7 +38,7 @@ def test_generate_raw_key_format():
 
 
 def test_hash_is_deterministic_and_not_the_raw_key():
-    k = "sqv_example"
+    k = "skm_example"
     assert _hash(k) == _hash(k)
     assert _hash(k) != k
     assert len(_hash(k)) == 64, "sha256 hex digest is 64 chars"
@@ -64,7 +64,7 @@ def _build_app():
     return TestClient(app)
 
 
-def _stub_resolution(valid_key="sqv_goodkey", key_user="key-user-1",
+def _stub_resolution(valid_key="skm_goodkey", key_user="key-user-1",
                      valid_jwt="goodjwt", jwt_user="jwt-user-1"):
     """Patch the middleware's key + JWT resolvers; clear the TTL cache."""
     mw._api_key_cache.clear()
@@ -98,7 +98,7 @@ def test_protected_api_requires_credentials():
 def test_api_key_bearer_resolves_user():
     _stub_resolution()
     client = _build_app()
-    r = client.get("/api/probe", headers={"Authorization": "Bearer sqv_goodkey"})
+    r = client.get("/api/probe", headers={"Authorization": "Bearer skm_goodkey"})
     assert r.status_code == 200, r.text
     assert r.json() == {"user_id": "key-user-1", "method": "api_key"}
 
@@ -106,7 +106,7 @@ def test_api_key_bearer_resolves_user():
 def test_api_key_x_header_resolves_user():
     _stub_resolution()
     client = _build_app()
-    r = client.get("/api/probe", headers={"X-API-Key": "sqv_goodkey"})
+    r = client.get("/api/probe", headers={"X-API-Key": "skm_goodkey"})
     assert r.status_code == 200, r.text
     assert r.json()["user_id"] == "key-user-1"
 
@@ -114,7 +114,7 @@ def test_api_key_x_header_resolves_user():
 def test_unknown_api_key_is_401():
     _stub_resolution()
     client = _build_app()
-    r = client.get("/api/probe", headers={"Authorization": "Bearer sqv_nope"})
+    r = client.get("/api/probe", headers={"Authorization": "Bearer skm_nope"})
     assert r.status_code == 401, r.text
 
 

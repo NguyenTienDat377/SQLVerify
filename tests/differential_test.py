@@ -1,7 +1,7 @@
 """
 tests/differential_test.py
 
-Differential testing of SQLVerify's Z3 encoding against concrete SQLite
+Differential testing of Skolem's Z3 encoding against concrete SQLite
 execution (the missing test layer named in CLAUDE.md).
 
 For each seed:

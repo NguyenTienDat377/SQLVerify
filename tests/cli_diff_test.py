@@ -1,7 +1,7 @@
 """
 tests/cli_diff_test.py
 
-Tests for the `sqlverify diff` CLI command (cli/sqlverify_cli.py).
+Tests for the `skolem diff` CLI command (cli/skolem_cli.py).
 
 Unlike cli_verify_test.py, git plumbing is exercised for real — every test
 builds a throwaway git repo under a temp dir and drives real `git` subprocess
@@ -35,7 +35,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cli.sqlverify_cli as cli
+import cli.skolem_cli as cli
 
 DDL = "CREATE TABLE users (id INT PRIMARY KEY, age INT);"
 
@@ -70,8 +70,8 @@ def _reset(responses=None):
     _responses.clear()
     if responses:
         _responses.extend(responses)
-    os.environ["SQLVERIFY_API_KEY"] = "sqv_test_key"
-    os.environ.pop("SQLVERIFY_URL", None)
+    os.environ["SKOLEM_API_KEY"] = "skm_test_key"
+    os.environ.pop("SKOLEM_URL", None)
 
 
 # ── Git repo fixture ─────────────────────────────────────────────────────────

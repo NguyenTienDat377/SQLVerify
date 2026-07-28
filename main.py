@@ -67,12 +67,12 @@ if _SENTRY_DSN:
     sentry_sdk.init(
         dsn=_SENTRY_DSN,
         environment=os.getenv("SENTRY_ENVIRONMENT", "production"),
-        release="sqlverify@0.1.0",
+        release="skolem@0.1.0",
         traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
         send_default_pii=False,
         # Don't ship frame-local secrets to Sentry. The default scrubber matches
         # var names by exact denylist membership, so secret-bearing locals like
-        # `raw_key` (the sqv_ API key) and `access_token` (the Supabase JWT) would
+        # `raw_key` (the skm_ API key) and `access_token` (the Supabase JWT) would
         # otherwise leak verbatim on any exception in the auth path.
         include_local_variables=False,
     )
@@ -101,10 +101,10 @@ def _validate_required_env() -> None:
 async def lifespan(app: FastAPI):
     _validate_required_env()
     init_analytics()
-    logger.info("SQLVerify starting up")
+    logger.info("Skolem starting up")
     yield
     shutdown_analytics()  # flush queued events so the last runs aren't lost
-    logger.info("SQLVerify shutting down")
+    logger.info("Skolem shutting down")
 
 # Swagger/ReDoc are gated behind ENABLE_DOCS so the interactive console + raw
 # OpenAPI schema aren't publicly reachable in production. Unset/false → FastAPI
@@ -120,7 +120,7 @@ async def lifespan(app: FastAPI):
 _DOCS_ENABLED = os.getenv("ENABLE_DOCS", "").lower() == "true"
 
 app = FastAPI(
-    title="SQLVerify",
+    title="Skolem",
     description="Formal verification for AI-generated SQL queries.",
     version="0.1.0",
     lifespan=lifespan,
@@ -279,15 +279,15 @@ async def log_requests(request: Request, call_next):
 
 @app.on_event("startup")
 async def startup():
-    logger.info("SQLVerify starting up")
+    logger.info("Skolem starting up")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    logger.info("SQLVerify shutting down")
+    logger.info("Skolem shutting down")
 
 
-_SITE_URL = os.getenv("SITE_URL", "https://sqlverify.com").rstrip("/")
+_SITE_URL = os.getenv("SITE_URL", "https://skolem.dev").rstrip("/")
 templates.env.globals["site_url"] = _SITE_URL
 
 
@@ -317,20 +317,37 @@ async def robots_txt():
     return Response(content=body, media_type="text/plain")
 
 
+# Sitemap entries: (path, lastmod). Deliberately no <priority> or <changefreq> —
+# Google ignores both outright. They were only ever hints, and since every site
+# on the web set them to 1.0/daily they stopped carrying any signal at all.
+#
+# <lastmod> IS used, but only for as long as it stays trustworthy: a sitemap
+# that claims everything changed today teaches Google the field is noise, after
+# which it's discounted for the whole site. So these dates are maintained BY
+# HAND and must only move when the page's content genuinely changes. Being
+# stale is the safe failure (Google just recrawls on its own schedule); being
+# always-today is the harmful one.
+#
+# Do NOT "improve" this by deriving the date from file mtime or `git log`.
+# .dockerignore excludes .git/, so there is no history in the container, and
+# Render builds from a fresh clone — every file's mtime is the deploy time.
+# Either route would stamp all six pages with today's date on every deploy,
+# which is exactly the self-defeating pattern described above.
+_SITEMAP_PAGES = [
+    ("/",             "2026-07-27"),
+    ("/docs",         "2026-07-27"),
+    ("/integrations", "2026-07-27"),
+    ("/pricing",      "2026-07-07"),
+    ("/terms",        "2026-06-20"),
+    ("/privacy",      "2026-06-20"),
+]
+
+
 @app.get("/sitemap.xml", include_in_schema=False)
 async def sitemap_xml():
-    pages = [
-        ("/", "weekly", "1.0"),
-        ("/pricing", "monthly", "0.8"),
-        ("/docs", "weekly", "0.9"),
-        ("/integrations", "monthly", "0.7"),
-        ("/terms", "yearly", "0.3"),
-        ("/privacy", "yearly", "0.3"),
-    ]
     urls = "".join(
-        f"<url><loc>{_SITE_URL}{path}</loc>"
-        f"<changefreq>{freq}</changefreq><priority>{prio}</priority></url>"
-        for path, freq, prio in pages
+        f"<url><loc>{_SITE_URL}{path}</loc><lastmod>{lastmod}</lastmod></url>"
+        for path, lastmod in _SITEMAP_PAGES
     )
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>'

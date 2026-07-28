@@ -1,7 +1,7 @@
 <wizard-report>
 # PostHog post-wizard report
 
-The wizard has completed a deep integration of PostHog analytics into SQLVerify. The existing `core/analytics.py` module (which already captured `verification_run` events) was extended with 10 new capture functions and a user-identification helper. Events are now fired across every major business flow: authentication, billing, subscription lifecycle, project and API-key management, quota enforcement, and on-demand AI explanation requests. All events use the Supabase user UUID as `distinct_id`; PII (email) is sent only via `posthog_client.set()` (person properties), never in `capture()` event properties.
+The wizard has completed a deep integration of PostHog analytics into Skolem. The existing `core/analytics.py` module (which already captured `verification_run` events) was extended with 10 new capture functions and a user-identification helper. Events are now fired across every major business flow: authentication, billing, subscription lifecycle, project and API-key management, quota enforcement, and on-demand AI explanation requests. All events use the Supabase user UUID as `distinct_id`; PII (email) is sent only via `posthog_client.set()` (person properties), never in `capture()` event properties.
 
 | Event | Description | File |
 |---|---|---|

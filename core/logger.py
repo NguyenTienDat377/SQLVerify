@@ -1,7 +1,7 @@
 """
 core/logger.py
 
-Loguru-based logging setup for SQLVerify.
+Loguru-based logging setup for Skolem.
 
 Usage anywhere in the codebase:
     from core.logger import logger

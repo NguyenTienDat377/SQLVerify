@@ -1,5 +1,5 @@
 -- Migration #2: per-user API keys for the CI/CD auth path.
--- Only the sha256 hash is stored; the raw `sqv_…` key is shown once at creation.
+-- Only the sha256 hash is stored; the raw `skm_…` key is shown once at creation.
 -- Server lookups use the service key (RLS-bypassing) so resolve_api_key() can
 -- match a hash across all users.
 

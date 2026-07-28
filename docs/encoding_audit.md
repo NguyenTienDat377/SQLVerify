@@ -1,6 +1,6 @@
-# Encoding audit: SQLVerify vs. VeriEQL (OOPSLA 2024)
+# Encoding audit: Skolem vs. VeriEQL (OOPSLA 2024)
 
-Cross-check of SQLVerify's Z3 encoding against the paper it is based on:
+Cross-check of Skolem's Z3 encoding against the paper it is based on:
 
 > He, Zhao, Wang, Wang. *VeriEQL: Bounded Equivalence Verification for Complex
 > SQL Queries with Integrity Constraints.* Proc. ACM Program. Lang. 8, OOPSLA1,
@@ -24,7 +24,7 @@ Each DEVIATES row states which direction of error it can introduce.
 | 3 | Attributes as uninterpreted functions (§4.2) | Flattened to one Z3 variable per (table, column, row) instead of `attr(t)` UF applications | MATCHES (equivalent formulation: each `attr(tᵢ)` term is named directly; no tuple ever flows through two different attribute functions) |
 | 4 | IC-PK Φ₁: PK attributes non-NULL (Fig. 8) | `core/ddl_parser.py:232` forces `nullable=False` on PK columns → enforced via the IC-NN path | MATCHES — **load-bearing dependency**: the Φ₂ encoding (row below) compares raw values without NULL flags and is sound *only because of this line* |
 | 5 | IC-PK Φ₂: any two tuples differ on ≥1 PK attribute, ¬(∧ₖ tᵢ.aₖ = tⱼ.aₖ) (Fig. 8) | `domain_constraints()` PK block: `Implies(And(exists[i], exists[j]), Or(differs))` | MATCHES — composite keys handled correctly (per-column inequality would over-constrain; the code comment documents this) |
-| 6 | IC-FK: ∀t₁∈R₁ ∃t₂∈R₂. t₁.a₁ = t₂.a₂ (Fig. 8) | `domain_constraints()` FK block | DEVIATES (intentional): a NULL FK cell is exempted (`Implies(And(exists, ¬null), ∃ match)`), matching real SQL `FOREIGN KEY` semantics where NULLs are allowed. The paper's rule is stricter. Effect: SQLVerify admits *more* databases → "equivalent" verdicts remain sound; counterexamples may use NULL FKs, which real databases accept. No false-equivalent risk. |
+| 6 | IC-FK: ∀t₁∈R₁ ∃t₂∈R₂. t₁.a₁ = t₂.a₂ (Fig. 8) | `domain_constraints()` FK block | DEVIATES (intentional): a NULL FK cell is exempted (`Implies(And(exists, ¬null), ∃ match)`), matching real SQL `FOREIGN KEY` semantics where NULLs are allowed. The paper's rule is stricter. Effect: Skolem admits *more* databases → "equivalent" verdicts remain sound; counterexamples may use NULL FKs, which real databases accept. No false-equivalent risk. |
 | 7 | IC-NN: all tuples non-NULL on attribute (Fig. 8) | `domain_constraints()`: `Implies(row_exists, ¬is_null)` for `nullable=False` columns | MATCHES |
 | 8 | IC-Check (Fig. 8/9) | CHECK constraints are parsed by `ddl_parser` but **not encoded** | DEVIATES (documented): symbolic DB admits databases violating CHECK. Direction of error: spurious **divergent** only — a counterexample may violate a CHECK constraint, and the SQLite witness cross-check will NOT catch it (the witness DB is created without CHECK). Never produces a false "equivalent" (more databases = stronger equivalence claim). Listed in CLAUDE.md "V1 known limitations". |
 | 9 | IC-Inc / auto-increment (Fig. 8) | Not parsed, not encoded | N/A — construct never claimed; absence admits more databases, same one-sided error direction as #8 |

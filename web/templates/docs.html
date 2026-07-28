@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 
-{% block title %}Documentation — SQL Equivalence API | SQLVerify{% endblock %}
+{% block title %}Documentation — SQL Equivalence API | Skolem{% endblock %}
 
-{% block description %}SQLVerify API documentation: prove two SQL queries are semantically equivalent with Z3/SMT formal verification, or get a concrete counterexample database where they diverge. REST API, CLI, and MCP server for AI agents.{% endblock %}
+{% block description %}Skolem API documentation: prove two SQL queries are semantically equivalent with Z3/SMT formal verification, or get a concrete counterexample database where they diverge. REST API, CLI, and MCP server for AI agents.{% endblock %}
 
 {% block content %}
 <div class="panel" style="max-width: 860px; margin: 2rem auto; padding: 2rem;">
 
   <header style="margin-bottom: 2.5rem;">
-    <h1 style="font-size: 1.75rem; margin-bottom: 0.5rem;">SQLVerify Documentation</h1>
+    <h1 style="font-size: 1.75rem; margin-bottom: 0.5rem;">Skolem Documentation</h1>
     <p style="color: var(--text-secondary); font-size: 1.05rem; line-height: 1.6;">
-      SQLVerify formally proves that two SQL queries return the same result on
+      Skolem formally proves that two SQL queries return the same result on
       <em>every</em> database — or hands you a concrete database where they
       disagree. It is a solver, not a linter: an <code>equivalent</code> verdict
       is a proof, and a <code>divergent</code> verdict comes with the
@@ -29,7 +29,7 @@
 
     <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">HTTP</h3>
     <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">curl -X POST {{ site_url }}/api/verify/text \
-  -H "Authorization: Bearer $SQLVERIFY_API_KEY" \
+  -H "Authorization: Bearer $SKOLEM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "ddl_sql": "CREATE TABLE users (id INT PRIMARY KEY, org_id INT);",
@@ -38,12 +38,12 @@
   }'</div>
 
     <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">CLI</h3>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">export SQLVERIFY_API_KEY=sqv_your_key_here
+    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">export SKOLEM_API_KEY=skm_your_key_here
 
-sqlverify verify --ddl schema.sql --v1 before.sql --v2 after.sql
+skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
 
 # or verify every query your branch changed:
-sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
+skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
 
     <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">AI agents (MCP)</h3>
     <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
@@ -64,8 +64,8 @@ sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
 
     <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">Authentication</h3>
     <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-      Send your key as <code>Authorization: Bearer sqv_…</code> or
-      <code>X-API-Key: sqv_…</code>. Keys are shown once at creation and stored
+      Send your key as <code>Authorization: Bearer skm_…</code> or
+      <code>X-API-Key: skm_…</code>. Keys are shown once at creation and stored
       only as a hash — if you lose one, revoke it and mint another.
     </p>
 
@@ -141,7 +141,7 @@ sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
           </tr>
           <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
             <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">error</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">The input used SQL outside the supported subset, or the DDL didn't parse. SQLVerify fails closed rather than silently ignoring what it can't encode.</td>
+            <td style="padding: 0.5rem; color: var(--text-secondary);">The input used SQL outside the supported subset, or the DDL didn't parse. Skolem fails closed rather than silently ignoring what it can't encode.</td>
           </tr>
         </tbody>
       </table>
@@ -210,7 +210,7 @@ sqlverify diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
   <section>
     <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Supported SQL</h2>
     <p style="color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem;">
-      SQLVerify handles multi-table join chains mixing <code>INNER</code>,
+      Skolem handles multi-table join chains mixing <code>INNER</code>,
       <code>LEFT</code>, <code>RIGHT</code>, and <code>FULL</code> joins,
       <code>GROUP BY</code> and <code>HAVING</code> with aggregates,
       three-valued NULL logic, non-recursive CTEs, and uncorrelated

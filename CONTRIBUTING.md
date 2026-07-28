@@ -1,12 +1,12 @@
-# Contributing to SQLVerify
+# Contributing to Skolem
 
-Thanks for your interest in contributing. SQLVerify is a formal verification tool for AI-generated SQL — the core engine is Z3/SMT based, so contributions here require some care to not break solver correctness. This document explains how to contribute safely.
+Thanks for your interest in contributing. Skolem is a formal verification tool for AI-generated SQL — the core engine is Z3/SMT based, so contributions here require some care to not break solver correctness. This document explains how to contribute safely.
 
 ---
 
 ## Before You Start
 
-**Read this first:** SQLVerify's value proposition is *deterministic correctness*. A bug in the Z3 encoding layer (`core/`) is worse than a missing feature — it means the tool silently passes incorrect SQL. Every change to `core/` must come with a test case.
+**Read this first:** Skolem's value proposition is *deterministic correctness*. A bug in the Z3 encoding layer (`core/`) is worse than a missing feature — it means the tool silently passes incorrect SQL. Every change to `core/` must come with a test case.
 
 ---
 
@@ -37,8 +37,8 @@ If you're unsure, open an issue first and ask before writing code.
 ## Setup
 
 ```bash
-git clone https://github.com/NguyenTienDat377/sqlverify.git
-cd sqlverify
+git clone https://github.com/NguyenTienDat377/skolem.git
+cd skolem
 
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
@@ -155,12 +155,12 @@ pytest tests/
 
 ## Reporting Bugs
 
-If you found a query pair where SQLVerify gives the wrong answer (says equivalent when it's not, or vice versa), that's the most valuable bug report you can file.
+If you found a query pair where Skolem gives the wrong answer (says equivalent when it's not, or vice versa), that's the most valuable bug report you can file.
 
 Please include:
 - The DDL
 - Both query versions
-- What SQLVerify returned
+- What Skolem returned
 - What you expected
 
 Open an issue with the label `wrong-result`.

@@ -2,7 +2,7 @@
 tests/paper_cases_test.py
 
 Regression tests derived from the VeriEQL paper (3649849.pdf, OOPSLA 2024)
-to validate SQLVerify's encoding against the paper's semantics:
+to validate Skolem's encoding against the paper's semantics:
 
   - Fig. 6   join semantics (null extension, multiplicity preservation)
   - Fig. 8   integrity constraints (IC-PK incl. composite keys, IC-FK, IC-NN)
@@ -239,6 +239,24 @@ def test_neq_already_excludes_null():
     _check(
         "SELECT eid FROM emp WHERE sal <> 5",
         "SELECT eid FROM emp WHERE sal IS NOT NULL AND sal <> 5",
+        "equivalent",
+    )
+
+
+def test_is_not_null_is_not_silently_inverted():
+    # Regression guard for the sqlglot 30.13 AST change: `IS NOT NULL` used to
+    # arrive as Not(Is(col, Null)) and now arrives as a single Is node carrying
+    # negate=True. The encoder matched only the wrapper, so the newer sqlglot
+    # made `IS NOT NULL` encode as `IS NULL` — the predicate's exact inverse.
+    #
+    # Asserted semantically rather than on the parse tree: the two spellings
+    # below are the same predicate, but they take *different* paths through
+    # _parse_predicate (the negate flag vs. the exp.Not branch), so they can
+    # only agree if the flag is actually read. That keeps the test valid on
+    # either sqlglot shape, which an AST-shape assertion would not be.
+    _check(
+        "SELECT eid FROM emp WHERE sal IS NOT NULL",
+        "SELECT eid FROM emp WHERE NOT (sal IS NULL)",
         "equivalent",
     )
 

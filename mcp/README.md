@@ -1,20 +1,20 @@
-# SQLVerify MCP server
+# Skolem MCP server
 
 A thin [MCP](https://modelcontextprotocol.io) server that lets AI agents (Claude
-Code, Claude Desktop, Cursor, …) call SQLVerify **in-loop** to formally prove
+Code, Claude Desktop, Cursor, …) call Skolem **in-loop** to formally prove
 that a rewritten SQL query is equivalent to the original — or get a concrete
 counterexample database where they differ.
 
-It holds no Z3 solver. It forwards each call to a running SQLVerify's
-`POST /api/verify/text`, authenticated with a per-user `sqv_` API key. The engine
+It holds no Z3 solver. It forwards each call to a running Skolem's
+`POST /api/verify/text`, authenticated with a per-user `skm_` API key. The engine
 stays on the server; this proxy runs wherever the agent runs.
 
-This lives inside the SQLVerify repo (versioned with the API contract it proxies)
+This lives inside the Skolem repo (versioned with the API contract it proxies)
 but is self-contained — it only needs `mcp` + `httpx`, not the app's deps.
 
 ## Exposed tool
 
-`verify_sql_equivalence(ddl_sql, sql_v1, sql_v2, bound=3)` → returns SQLVerify's
+`verify_sql_equivalence(ddl_sql, sql_v1, sql_v2, bound=3)` → returns Skolem's
 `VerifyResponse` JSON verbatim:
 
 | field | meaning |
@@ -34,7 +34,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Mint a `sqv_…` key in the SQLVerify UI (**Keys** page).
+Mint a `skm_…` key in the Skolem UI (**Keys** page).
 
 ## Connect it to Claude
 
@@ -43,11 +43,11 @@ Use **absolute paths** (the client's working directory isn't your repo).
 ### Claude Code
 
 ```bash
-claude mcp add sqlverify \
-  --env SQLVERIFY_API_KEY=sqv_yourkey \
-  --env SQLVERIFY_URL=https://sqlverify.com \
-  -- /abs/path/to/SQLVerify/mcp/.venv/bin/python \
-     /abs/path/to/SQLVerify/mcp/sqlverify_mcp.py
+claude mcp add skolem \
+  --env SKOLEM_API_KEY=skm_yourkey \
+  --env SKOLEM_URL=https://skolem.dev \
+  -- /abs/path/to/Skolem/mcp/.venv/bin/python \
+     /abs/path/to/Skolem/mcp/skolem_mcp.py
 ```
 
 ### Claude Desktop
@@ -57,12 +57,12 @@ claude mcp add sqlverify \
 ```json
 {
   "mcpServers": {
-    "sqlverify": {
-      "command": "/abs/path/to/SQLVerify/mcp/.venv/bin/python",
-      "args": ["/abs/path/to/SQLVerify/mcp/sqlverify_mcp.py"],
+    "skolem": {
+      "command": "/abs/path/to/Skolem/mcp/.venv/bin/python",
+      "args": ["/abs/path/to/Skolem/mcp/skolem_mcp.py"],
       "env": {
-        "SQLVERIFY_API_KEY": "sqv_yourkey",
-        "SQLVERIFY_URL": "https://sqlverify.com"
+        "SKOLEM_API_KEY": "skm_yourkey",
+        "SKOLEM_URL": "https://skolem.dev"
       }
     }
   }
@@ -72,9 +72,9 @@ claude mcp add sqlverify \
 ## Test it without an agent
 
 ```bash
-SQLVERIFY_API_KEY=sqv_yourkey \
+SKOLEM_API_KEY=skm_yourkey \
   npx @modelcontextprotocol/inspector \
-  .venv/bin/python sqlverify_mcp.py
+  .venv/bin/python skolem_mcp.py
 ```
 
 Opens a UI to see the advertised tool and fire test calls.
@@ -82,11 +82,11 @@ Opens a UI to see the advertised tool and fire test calls.
 ## Self-healing repair loop
 
 `examples/repair_loop.py` is the headline use case: an agent proposes a query,
-SQLVerify proves it or returns a counterexample, and the agent revises against
+Skolem proves it or returns a counterexample, and the agent revises against
 that ground truth until it's proven equivalent (or a budget runs out).
 
 ```bash
-SQLVERIFY_API_KEY=sqv_... SQLVERIFY_URL=http://localhost:8000 \
+SKOLEM_API_KEY=skm_... SKOLEM_URL=http://localhost:8000 \
   python examples/repair_loop.py
 ```
 
@@ -105,5 +105,5 @@ agent. Key discipline the loop encodes:
 
 | var | required | default | notes |
 |---|---|---|---|
-| `SQLVERIFY_API_KEY` | yes | — | per-user `sqv_` key; calls metered against its quota |
-| `SQLVERIFY_URL` | no | `https://sqlverify.com` | point at `http://localhost:8000` for local dev |
+| `SKOLEM_API_KEY` | yes | — | per-user `skm_` key; calls metered against its quota |
+| `SKOLEM_URL` | no | `https://skolem.dev` | point at `http://localhost:8000` for local dev |

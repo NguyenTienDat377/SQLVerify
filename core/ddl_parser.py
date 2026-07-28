@@ -366,7 +366,7 @@ def _fold_drop_action(table: Table, action: exp.Drop) -> None:
         return
     if kind == "CONSTRAINT":
         raise ValueError(
-            f"ALTER TABLE '{table.name}' DROP CONSTRAINT: not supported — SQLVerify "
+            f"ALTER TABLE '{table.name}' DROP CONSTRAINT: not supported — Skolem "
             "doesn't track constraint names, so it can't identify which constraint "
             "to remove."
         )
@@ -453,7 +453,7 @@ def parse_ddl(ddl_sql: str, dialect: str = "generic") -> SchemaModel:
         elif stmt is not None:
             raise ValueError(
                 f"Unsupported DDL statement: {type(stmt).__name__}. Only CREATE TABLE, "
-                "CREATE INDEX, and ALTER TABLE are supported — SQLVerify never silently "
+                "CREATE INDEX, and ALTER TABLE are supported — Skolem never silently "
                 "drops a schema-defining statement."
             )
 
