@@ -3082,8 +3082,7 @@ button.sk-tab:focus-visible {
   border-right: 1px solid var(--panel-border);
   background: var(--bg-deep);
   overflow-y: auto;
-  transition: width 0.3s var(--ease-standard, ease),
-              opacity 0.3s var(--ease-standard, ease);
+  transition: opacity 0.15s ease;
   width: 250px;
 }
 
@@ -3120,9 +3119,11 @@ button.sk-tab:focus-visible {
   box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
 }
 
-body.is-resizing {
+body.is-resizing,
+body.is-resizing * {
   user-select: none !important;
   cursor: col-resize !important;
+  transition: none !important;
 }
 
 body.is-resizing iframe,
@@ -3367,7 +3368,7 @@ body.is-resizing textarea {
 .sk-ws-editor {
   border-right: 1px solid var(--panel-border);
   overflow: hidden;
-  transition: width 0.3s var(--ease-standard, ease), opacity 0.3s var(--ease-standard, ease);
+  transition: opacity 0.15s ease;
 }
 
 .sk-ws-form {

@@ -456,10 +456,12 @@
   // ── Sidebar & Editor toggles ─────────────────────────────────────────────
   document.getElementById("toggle-sidebar-btn").addEventListener("click", () => {
     document.getElementById("left-panel").classList.toggle("collapsed");
+    if (window.skolemClampWidth) window.skolemClampWidth();
   });
 
   document.getElementById("toggle-editor-btn").addEventListener("click", () => {
     document.querySelector(".sk-ws-editor").classList.toggle("collapsed");
+    if (window.skolemClampWidth) window.skolemClampWidth();
   });
 
   document.querySelectorAll("[data-jump]").forEach((btn) => {
@@ -652,11 +654,15 @@
 
     function clampWidth(targetWidth) {
       const containerWidth = container.getBoundingClientRect().width;
-      if (!containerWidth || containerWidth <= 1100) return null;
+      if (!containerWidth) return null;
 
-      const sideWidth = sidebar && !sidebar.classList.contains("collapsed")
-        ? sidebar.getBoundingClientRect().width
-        : 0;
+      if (containerWidth <= 1100) {
+        container.style.removeProperty("--editor-width");
+        return null;
+      }
+
+      const isSidebarCollapsed = sidebar && sidebar.classList.contains("collapsed");
+      const sideWidth = isSidebarCollapsed ? 0 : 250;
 
       const minEditorWidth = 250;
       const minResultsWidth = 320;
@@ -667,10 +673,20 @@
         containerWidth - sideWidth - minResultsWidth - resizerWidth
       );
 
+      if (typeof targetWidth !== "number" || isNaN(targetWidth)) {
+        const styleVal = parseFloat(container.style.getPropertyValue("--editor-width"));
+        const savedVal = parseFloat(localStorage.getItem("skolem_editor_width"));
+        targetWidth = !isNaN(styleVal) && styleVal > 0
+          ? styleVal
+          : (!isNaN(savedVal) && savedVal > 0 ? savedVal : (containerWidth - sideWidth) / 2);
+      }
+
       const clamped = Math.max(minEditorWidth, Math.min(targetWidth, maxEditorWidth));
       container.style.setProperty("--editor-width", clamped + "px");
       return clamped;
     }
+
+    window.skolemClampWidth = clampWidth;
 
     const savedWidth = parseFloat(localStorage.getItem("skolem_editor_width"));
     if (!isNaN(savedWidth) && savedWidth > 0) {
@@ -730,10 +746,7 @@
     window.addEventListener("touchend", onPointerUp);
 
     window.addEventListener("resize", () => {
-      const currentWidth = parseFloat(container.style.getPropertyValue("--editor-width"));
-      if (!isNaN(currentWidth) && currentWidth > 0) {
-        clampWidth(currentWidth);
-      }
+      clampWidth();
     });
   })();
 </script>
