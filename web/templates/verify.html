@@ -332,6 +332,9 @@
     </form>
   </section>
 
+  <!-- ── Column Splitter (Draggable Resizer) ── -->
+  <div class="sk-resizer" id="resizer-editor" title="Drag to resize columns (double-click to reset)"></div>
+
   <!-- ── Column 3: results ── -->
   <section class="sk-ws-results">
     <div class="sk-ws-chrome">
@@ -637,6 +640,75 @@
       chromeDialect.textContent = dialectSel.value + " · utf-8 · lf";
     });
     sync();
+  })();
+
+  // ── Column Resizer ────────────────────────────────────────────────────────
+  (function initColumnResizer() {
+    const resizer = document.getElementById("resizer-editor");
+    const container = document.querySelector(".sk-ws");
+    const editor = document.querySelector(".sk-ws-editor");
+    const sidebar = document.getElementById("left-panel");
+    if (!resizer || !container || !editor) return;
+
+    const savedWidth = localStorage.getItem("skolem_editor_width");
+    if (savedWidth) {
+      container.style.setProperty("--editor-width", savedWidth + "px");
+    }
+
+    let isDragging = false;
+
+    function onPointerDown(e) {
+      isDragging = true;
+      resizer.classList.add("is-dragging");
+      document.body.classList.add("is-resizing");
+      e.preventDefault();
+    }
+
+    function onPointerMove(e) {
+      if (!isDragging) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+
+      const sideWidth = sidebar && !sidebar.classList.contains("collapsed")
+        ? sidebar.getBoundingClientRect().width
+        : 0;
+
+      let editorWidth = clientX - containerRect.left - sideWidth;
+
+      const minEditorWidth = 200;
+      const maxEditorWidth = containerRect.width - sideWidth - 250;
+
+      editorWidth = Math.max(minEditorWidth, Math.min(editorWidth, maxEditorWidth));
+
+      if (editor.classList.contains("collapsed")) {
+        editor.classList.remove("collapsed");
+      }
+
+      container.style.setProperty("--editor-width", editorWidth + "px");
+      localStorage.setItem("skolem_editor_width", editorWidth);
+    }
+
+    function onPointerUp() {
+      if (!isDragging) return;
+      isDragging = false;
+      resizer.classList.remove("is-dragging");
+      document.body.classList.remove("is-resizing");
+    }
+
+    resizer.addEventListener("mousedown", onPointerDown);
+    resizer.addEventListener("touchstart", onPointerDown, { passive: false });
+
+    resizer.addEventListener("dblclick", () => {
+      container.style.removeProperty("--editor-width");
+      localStorage.removeItem("skolem_editor_width");
+    });
+
+    window.addEventListener("mousemove", onPointerMove);
+    window.addEventListener("touchmove", onPointerMove, { passive: false });
+
+    window.addEventListener("mouseup", onPointerUp);
+    window.addEventListener("touchend", onPointerUp);
   })();
 </script>
 {% endblock %}
