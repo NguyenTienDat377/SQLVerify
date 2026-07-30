@@ -1,217 +1,369 @@
-{% extends "base.html" %} {% block content %}
-<div class="pricing-header">
-  <h1 class="pricing-title">Simple, transparent pricing</h1>
-  <p class="pricing-subtitle">
-    Start for free, then upgrade when you need more power. No hidden fees or
-    surprise charges.
-  </p>
-  {% if user_email %}
-  <div style="margin-top: 1.5rem; padding: 0.75rem 1.25rem; background-color: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; display: inline-block;">
-    <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">
-      Signed in as <strong style="color: var(--text-primary);">{{ user_email }}</strong>.
-      <br>
-      Buying for a different account? 
-      <a href="#" id="pricing-logout-link" style="color: var(--accent-color); text-decoration: none; font-weight: 500;">Sign out to switch</a>
+{% extends "base.html" %} {% block title %}Pricing — Skolem{% endblock %}
+{% block description %}Skolem pricing: every plan runs the same Z3 engine at the same bound and timeout limits. Free includes {{ free_tier_limit }} verification runs per month.{% endblock %}
+{% block content %}
+
+<!-- Pricing page. Ported from the "Skolem landing page redesign" Claude Design
+     project (Pricing.dc.html). Same standing rule as landing.html: every claim
+     here is checked against the code. The mockup gated bound, solver timeout,
+     history retention and API tokens by tier — the engine gates NONE of those
+     (_enforce_quota in api/verify.py only lifts the run cap for a paid tier),
+     so those rows now say "same on every plan", which is a better story anyway.
+     Limits come from the server context, never typed into the markup.
+     Do not add a row here that the code does not enforce. -->
+
+<div class="sk-page">
+  <header class="sk-pr-head">
+    <div class="sk-kicker">Metered by proofs, not by seats</div>
+    <h1 class="sk-h1 sk-pr-h1">Pay for proofs you actually run.</h1>
+    <p class="sk-lede">
+      Every plan runs the same Z3 engine, at the same bound and the same solver
+      timeouts. We don't paywall the strength of a proof — you're paying for
+      volume and for who picks up the phone when the solver returns
+      <code class="sk-inline-code">unknown</code>.
     </p>
-    <form id="logout-form-pricing" method="post" action="/auth/logout" style="display: none;"></form>
-  </div>
-  <script nonce="{{ request.state.csp_nonce }}">
-    document.getElementById("pricing-logout-link").addEventListener("click", function (e) {
-      e.preventDefault();
-      document.getElementById("logout-form-pricing").submit();
-    });
-  </script>
-  {% endif %}
-</div>
-
-<div class="pricing-grid">
-  <!-- Free Tier -->
-  <div class="pricing-card">
-    <h3 class="pricing-tier">Free</h3>
-    <div class="pricing-price">
-      $0 <span class="pricing-period">/ month</span>
-    </div>
-
-    <ul class="pricing-features">
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        100 runs per month
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Community Support
-      </li>
-    </ul>
-
     {% if user_email %}
-    <a href="/" class="btn w-full btn-secondary">Go to App</a>
-    {% else %}
-    <a href="/auth/login" class="btn w-full btn-secondary">Get Started</a>
+    <div class="sk-pr-signed">
+      Signed in as <strong>{{ user_email }}</strong>. Buying for a different
+      account?
+      <button type="submit" form="logout-form-pricing" class="sk-linkbtn">
+        Sign out to switch
+      </button>
+      <form id="logout-form-pricing" method="post" action="/auth/logout" hidden></form>
+    </div>
     {% endif %}
-  </div>
+  </header>
 
-  <!-- Individual Tier -->
-  <div class="pricing-card popular">
-    <div class="popular-badge">Most Popular</div>
-    <h3 class="pricing-tier">Individual</h3>
-    <div class="pricing-price">
-      $9 <span class="pricing-period">/ month</span>
+  <!-- Plans -->
+  <section class="sk-pr-plans-wrap">
+    <div class="sk-plans">
+      <div class="sk-plan">
+        <div class="sk-plan-head">plan: free</div>
+        <div class="sk-plan-body">
+          <div>
+            <div class="sk-plan-name">Free</div>
+            <div class="sk-plan-price">
+              <span class="sk-plan-amount">$0</span>
+              <span class="sk-plan-per">forever</span>
+            </div>
+            <p class="sk-plan-desc">
+              For side projects, OSS repos and kicking the tyres on your own
+              migrations.
+            </p>
+          </div>
+          <div class="sk-plan-feats">
+            <div class="sk-feat"><span class="sk-y">+</span> {{ free_tier_limit }} verification runs / month</div>
+            <div class="sk-feat"><span class="sk-y">+</span> bound 1–{{ max_bound }}, full SQL coverage</div>
+            <div class="sk-feat"><span class="sk-y">+</span> workspace, CLI, MCP server</div>
+            <div class="sk-feat"><span class="sk-y">+</span> API keys for CI/CD</div>
+            <div class="sk-feat"><span class="sk-y">+</span> unlimited run history</div>
+            <div class="sk-feat sk-feat-off"><span class="sk-n">-</span> community support</div>
+          </div>
+          <div class="sk-plan-cta">
+            {% if user_email %}
+            <a href="/verify" class="btn btn-secondary w-full">Go to workspace</a>
+            {% else %}
+            <a href="/auth/login" class="btn btn-secondary w-full">Start free</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="sk-plan sk-plan-featured">
+        <div class="sk-plan-head sk-plan-head-featured">
+          <span>plan: individual</span><span>most used</span>
+        </div>
+        <div class="sk-plan-body">
+          <div>
+            <div class="sk-plan-name">Individual</div>
+            <div class="sk-plan-price">
+              <span class="sk-plan-amount">$9</span>
+              <span class="sk-plan-per">/ month</span>
+            </div>
+            <p class="sk-plan-desc">
+              For the engineer who reviews every LLM rewrite before it reaches a
+              migration.
+            </p>
+          </div>
+          <div class="sk-plan-feats">
+            <div class="sk-feat"><span class="sk-y">+</span> everything in Free</div>
+            <div class="sk-feat"><span class="sk-y">+</span> unlimited verification runs</div>
+            <div class="sk-feat"><span class="sk-y">+</span> no monthly cap in CI or your agent loop</div>
+            <div class="sk-feat"><span class="sk-y">+</span> email support, 1 business day</div>
+          </div>
+          <div class="sk-plan-cta">
+            <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
+            <a href="/billing/checkout?plan=individual" class="btn btn-primary btn-glow w-full">
+              Upgrade to Individual
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="sk-plan">
+        <div class="sk-plan-head">plan: team</div>
+        <div class="sk-plan-body">
+          <div>
+            <div class="sk-plan-name">Team</div>
+            <div class="sk-plan-price">
+              <span class="sk-plan-amount">$49</span>
+              <span class="sk-plan-per">/ month</span>
+            </div>
+            <p class="sk-plan-desc">
+              For platform teams gating every schema change in CI, across every
+              service.
+            </p>
+          </div>
+          <div class="sk-plan-feats">
+            <div class="sk-feat"><span class="sk-y">+</span> everything in Individual</div>
+            <div class="sk-feat"><span class="sk-y">+</span> unlimited runs across the whole team</div>
+            <div class="sk-feat"><span class="sk-y">+</span> shared support channel</div>
+            <div class="sk-feat"><span class="sk-y">+</span> onboarding for your migration layout</div>
+            <div class="sk-feat sk-feat-soon">
+              <span class="sk-s">~</span> GitHub Action — in development
+            </div>
+          </div>
+          <div class="sk-plan-cta">
+            <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
+            <a href="/billing/checkout?plan=team" class="btn btn-secondary w-full">
+              Upgrade to Team
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
+  </section>
 
-    <ul class="pricing-features">
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        500 runs per month
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Priority Support
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Advanced Analytics
-      </li>
-    </ul>
-
-    <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
-    <a
-      href="/billing/checkout?plan=individual"
-      class="btn w-full btn-primary"
-      >Upgrade to Individual</a
-    >
-  </div>
-
-  <!-- Team Tier -->
-  <div class="pricing-card">
-    <h3 class="pricing-tier">Team</h3>
-    <div class="pricing-price">
-      $49 <span class="pricing-period">/ month</span>
+  <!-- Limits, side by side -->
+  <section class="sk-section">
+    <div class="sk-section-head">
+      <h2 class="sk-h2">Limits, side by side</h2>
+      <span class="sk-comment">// same solver, same ceilings</span>
     </div>
+    <div class="sk-matrix">
+      <div class="sk-matrix-head">
+        <div>limit</div>
+        <div>free</div>
+        <div class="sk-matrix-hl">individual</div>
+        <div>team</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">verification runs / month</div>
+        <div>{{ free_tier_limit }}</div>
+        <div class="sk-matrix-hl-cell">unlimited</div>
+        <div>unlimited</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">max bound (rows / table)</div>
+        <div>{{ max_bound }}</div>
+        <div class="sk-matrix-hl-cell">{{ max_bound }}</div>
+        <div>{{ max_bound }}</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">solver timeout — workspace</div>
+        <div>{{ web_timeout_s }}s, up to {{ web_max_timeout_s }}s</div>
+        <div class="sk-matrix-hl-cell">{{ web_timeout_s }}s, up to {{ web_max_timeout_s }}s</div>
+        <div>{{ web_timeout_s }}s, up to {{ web_max_timeout_s }}s</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">solver timeout — CI API</div>
+        <div>{{ ci_timeout_s }}s, up to {{ ci_max_timeout_s }}s</div>
+        <div class="sk-matrix-hl-cell">{{ ci_timeout_s }}s, up to {{ ci_max_timeout_s }}s</div>
+        <div>{{ ci_timeout_s }}s, up to {{ ci_max_timeout_s }}s</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">SQL coverage</div>
+        <div>full</div>
+        <div class="sk-matrix-hl-cell">full</div>
+        <div>full</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">CLI · MCP · API keys</div>
+        <div>yes</div>
+        <div class="sk-matrix-hl-cell">yes</div>
+        <div>yes</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">counterexample + LLM explanation</div>
+        <div>yes</div>
+        <div class="sk-matrix-hl-cell">yes</div>
+        <div>yes</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">run history</div>
+        <div>unlimited</div>
+        <div class="sk-matrix-hl-cell">unlimited</div>
+        <div>unlimited</div>
+      </div>
+      <div class="sk-matrix-row">
+        <div class="sk-matrix-label">support</div>
+        <div>community</div>
+        <div class="sk-matrix-hl-cell">email, 1 business day</div>
+        <div>shared channel</div>
+      </div>
+      <div class="sk-matrix-row sk-matrix-row-soon">
+        <div class="sk-matrix-label">GitHub Action</div>
+        <div>—</div>
+        <div class="sk-matrix-hl-cell">—</div>
+        <div>in development</div>
+      </div>
+    </div>
+    <p class="sk-legend-note">
+      The bound, the timeouts and the supported SQL are identical on every plan.
+      A cheaper plan never buys you a weaker proof — it would make the verdict
+      mean something different depending on what you paid, which is the one
+      thing a verifier can't afford. Paid plans lift the monthly run cap.
+    </p>
+  </section>
 
-    <ul class="pricing-features">
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Unlimited runs
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Dedicated Support
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Custom Integrations
-      </li>
-      <li class="pricing-feature">
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Team Management
-      </li>
-    </ul>
+  <!-- Sizing -->
+  <section class="sk-section">
+    <div class="sk-calc">
+      <div class="sk-calc-copy">
+        <div class="sk-kicker">Sizing</div>
+        <h2 class="sk-h2">How many runs will you use?</h2>
+        <p class="sk-body">
+          One run is one verification of one query pair. A rewrite you check
+          twice is two runs — there's no result cache yet, so re-running the
+          same pair counts again.
+        </p>
+        <div class="sk-calc-control">
+          <label for="sk-rewrites" class="sk-calc-label">
+            <span>rewrites reviewed / week</span>
+            <span id="sk-rewrites-out" class="sk-calc-val">12</span>
+          </label>
+          <input
+            type="range"
+            id="sk-rewrites"
+            min="1"
+            max="200"
+            value="12"
+            class="sk-range"
+            data-free-limit="{{ free_tier_limit }}"
+          />
+        </div>
+      </div>
+      <div class="sk-calc-out">
+        <div class="sk-calc-prompt">$ skolem usage --estimate</div>
+        <div class="sk-calc-line">
+          <span>runs / month</span><span id="sk-runs" class="sk-calc-strong">52</span>
+        </div>
+        <div class="sk-calc-line">
+          <span>free allowance</span><span class="sk-calc-strong">{{ free_tier_limit }}</span>
+        </div>
+        <div class="sk-calc-rec">
+          <span>recommended</span><span id="sk-rec" class="sk-calc-rec-val">free</span>
+        </div>
+        <div id="sk-rec-note" class="sk-calc-note">
+          within the free tier — no card needed
+        </div>
+      </div>
+    </div>
+  </section>
 
-    <!-- In-app checkout: carries user_id to Lemon Squeezy via custom data -->
-    <a
-      href="/billing/checkout?plan=team"
-      class="btn w-full btn-secondary"
-      >Upgrade to Team</a
-    >
-  </div>
+  <!-- FAQ -->
+  <section class="sk-section">
+    <h2 class="sk-h2 sk-faq-h">Questions engineers actually ask</h2>
+    <div class="sk-faq">
+      <div class="sk-faq-item">
+        <div class="sk-faq-q">Does Skolem connect to my database?</div>
+        <p class="sk-faq-a">
+          No. It reads your DDL and your SQL text — there are no credentials to
+          hand over and no rows are ever read from your database. The
+          counterexample is invented by the solver, not sampled from production.
+          Note that the CLI and MCP server do send your DDL and query text to
+          the API to be verified.
+        </p>
+      </div>
+      <div class="sk-faq-item">
+        <div class="sk-faq-q">What counts as a run?</div>
+        <p class="sk-faq-a">
+          One verification of one query pair, from any surface — workspace, CLI,
+          MCP or the API. Every run counts against the monthly allowance,
+          including ones that come back
+          <code class="sk-inline-code">unknown</code> or
+          <code class="sk-inline-code">error</code>.
+        </p>
+      </div>
+      <div class="sk-faq-item">
+        <div class="sk-faq-q">Is a higher bound worth paying for?</div>
+        <p class="sk-faq-a">
+          It isn't something you pay for — bound 1–{{ max_bound }} is available
+          on every plan, including Free. The default of {{ default_bound }}
+          catches the large majority of real semantic bugs; raising it grows the
+          search space by roughly
+          <code class="sk-inline-code">bound^tables</code>, so the practical
+          limit is your patience, not your invoice.
+        </p>
+      </div>
+      <div class="sk-faq-item">
+        <div class="sk-faq-q">What happens when I hit the free limit?</div>
+        <p class="sk-faq-a">
+          Verification returns <code class="sk-inline-code">402</code> with an
+          upgrade prompt, and the CLI exits <code class="sk-inline-code">2</code>
+          — the same code it uses for any infrastructure problem, so a lapsed
+          quota can never be mistaken for a failing query. Nothing is deleted,
+          and your history stays readable.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sk-section sk-section-last">
+    <div class="sk-cta">
+      <div class="sk-cta-copy">
+        <h2 class="sk-h2 sk-cta-h">Start on Free. Upgrade when CI needs it.</h2>
+        <p class="sk-body">
+          No card required for the first {{ free_tier_limit }} runs.
+        </p>
+      </div>
+      <div class="sk-cta-action">
+        {% if user_email %}
+        <a href="/verify" class="btn btn-primary btn-large btn-glow">Run your first proof</a>
+        {% else %}
+        <a href="/auth/login" class="btn btn-primary btn-large btn-glow">Run your first proof</a>
+        {% endif %}
+        <span class="sk-cta-note">bound 1–{{ max_bound }} · cancel anytime from the billing portal</span>
+      </div>
+    </div>
+  </section>
 </div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+  (function () {
+    // The sizing estimate is deliberately arithmetic the visitor can redo in
+    // their head: weeks/month x rewrites, compared against the free allowance
+    // the server actually enforces (read from the input's data attribute, so
+    // the number here and the number in _enforce_quota can never disagree).
+    // The mockup also showed an estimated solver time; that was invented, and
+    // a fabricated latency figure on a page selling correctness is not worth
+    // the pixel it occupies.
+    var slider = document.getElementById("sk-rewrites");
+    if (!slider) return;
+
+    var WEEKS_PER_MONTH = 4.33;
+    var freeLimit = parseInt(slider.dataset.freeLimit, 10) || 0;
+    var out = document.getElementById("sk-rewrites-out");
+    var runsEl = document.getElementById("sk-runs");
+    var recEl = document.getElementById("sk-rec");
+    var noteEl = document.getElementById("sk-rec-note");
+
+    function update() {
+      var rewrites = Number(slider.value);
+      var runs = Math.round(rewrites * WEEKS_PER_MONTH);
+      out.textContent = rewrites;
+      runsEl.textContent = runs;
+
+      var withinFree = runs <= freeLimit;
+      recEl.textContent = withinFree ? "free" : "individual";
+      recEl.className = withinFree ? "sk-calc-rec-val" : "sk-calc-rec-val sk-calc-rec-up";
+      noteEl.textContent = withinFree
+        ? "within the free tier — no card needed"
+        : "past the free allowance — $9/month lifts the cap";
+    }
+
+    slider.addEventListener("input", update);
+    update();
+  })();
+</script>
 {% endblock %}

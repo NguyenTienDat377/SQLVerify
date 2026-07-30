@@ -5,154 +5,182 @@
 {% block description %}Skolem API documentation: prove two SQL queries are semantically equivalent with Z3/SMT formal verification, or get a concrete counterexample database where they diverge. REST API, CLI, and MCP server for AI agents.{% endblock %}
 
 {% block content %}
-<div class="panel" style="max-width: 860px; margin: 2rem auto; padding: 2rem;">
 
-  <header style="margin-bottom: 2.5rem;">
-    <h1 style="font-size: 1.75rem; margin-bottom: 0.5rem;">Skolem Documentation</h1>
-    <p style="color: var(--text-secondary); font-size: 1.05rem; line-height: 1.6;">
-      Skolem formally proves that two SQL queries return the same result on
-      <em>every</em> database — or hands you a concrete database where they
-      disagree. It is a solver, not a linter: an <code>equivalent</code> verdict
-      is a proof, and a <code>divergent</code> verdict comes with the
-      counterexample that produced it.
-    </p>
-  </header>
+<!-- Public docs. Shell ported from Docs.dc.html; the request/response tables are
+     introspected from the live Pydantic models by _describe_model() in main.py,
+     so a renamed field updates this page rather than rotting. Every coverage row
+     and CLI flag below is checked against core/ and cli/ — the mockup's were not.
+     See CLAUDE.md § docs.html before editing. -->
 
-  <!-- ================= Quickstart ================= -->
-  <section style="margin-bottom: 3rem;">
-    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Quickstart</h2>
-    <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">
-      Every surface talks to the same engine. Pick whichever fits where the
-      query lives. You'll need an API key from the
-      <a href="/keys">API Keys</a> page first.
-    </p>
+<div class="sk-docs">
+  <aside class="sk-docs-nav">
+    <div class="sk-side-h">reference</div>
+    <nav class="sk-docs-links">
+      <a href="#overview">what is proved</a>
+      <a href="#quickstart">quickstart</a>
+      <a href="#api">api reference</a>
+      <a href="#coverage">coverage</a>
+      <a href="#bags">bag semantics</a>
+      <a href="#nulls">three-valued logic</a>
+      <a href="#bounds">bounds &amp; completeness</a>
+      <a href="#cli">cli flags</a>
+      <a href="#limits">limits</a>
+    </nav>
+    <div class="sk-docs-nav-foot">
+      every claim here is scoped<br />to a schema and a bound
+    </div>
+  </aside>
 
-    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">HTTP</h3>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">curl -X POST {{ site_url }}/api/verify/text \
+  <main class="sk-docs-main">
+
+    <!-- ================= Overview ================= -->
+    <section id="overview" class="sk-doc-sec">
+      <div class="sk-kicker">reference / semantics</div>
+      <h1 class="sk-doc-h1">What Skolem actually proves</h1>
+      <p class="sk-doc-lede">
+        Given a schema <code class="sk-inline-code">S</code>, two queries
+        <code class="sk-inline-code">Q₁</code> and <code class="sk-inline-code">Q₂</code>,
+        and a bound <code class="sk-inline-code">k</code>, Skolem asks Z3 for a
+        database that satisfies <code class="sk-inline-code">S</code>, holds at
+        most <code class="sk-inline-code">k</code> rows per table, and makes the
+        two output bags differ.
+      </p>
+
+      <div class="sk-verdict-map">
+        <div><span class="sk-vm-red">sat</span> → a witness exists → <strong>divergent</strong> (the queries are not equivalent, full stop)</div>
+        <div><span class="sk-vm-green">unsat</span> → no witness at bound k → <strong>equivalent</strong> under S, for databases of that size</div>
+        <div><span class="sk-vm-yellow">unknown</span> → the solver gave up → <strong>no claim either way</strong></div>
+      </div>
+
+      <p class="sk-doc-body">
+        <code class="sk-inline-code">divergent</code> is absolute: a counterexample
+        is a counterexample at any scale. <code class="sk-inline-code">equivalent</code>
+        is bounded — see <a href="#bounds">bounds &amp; completeness</a>. Skolem
+        runs <strong>z3 {{ z3_version }}</strong>.
+      </p>
+    </section>
+
+    <!-- ================= Quickstart ================= -->
+    <section id="quickstart" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">Quickstart</h2>
+      <p class="sk-doc-body">
+        Every surface talks to the same engine. Pick whichever fits where the
+        query lives. You'll need an API key from the
+        <a href="/keys">API Keys</a> page first.
+      </p>
+
+      <h3 class="sk-doc-h3">HTTP</h3>
+<pre class="sk-doc-code">curl -X POST {{ site_url }}/api/verify/text \
   -H "Authorization: Bearer $SKOLEM_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "ddl_sql": "CREATE TABLE users (id INT PRIMARY KEY, org_id INT);",
     "sql_v1": "SELECT id FROM users",
     "sql_v2": "SELECT id FROM users WHERE org_id IS NOT NULL"
-  }'</div>
+  }'</pre>
 
-    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">CLI</h3>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">export SKOLEM_API_KEY=skm_your_key_here
+      <h3 class="sk-doc-h3">CLI</h3>
+<pre class="sk-doc-code">export SKOLEM_API_KEY=skm_your_key_here
 
 skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
 
 # or verify every query your branch changed:
-skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
+skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'</pre>
 
-    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">AI agents (MCP)</h3>
-    <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
-      Expose verification as a tool to Claude Code, Claude Desktop, or Cursor so
-      an agent can check its own SQL rewrites in-loop and revise against a real
-      counterexample instead of guessing.
-    </p>
-    <a href="/integrations" class="btn btn-secondary btn-small">Setup instructions →</a>
-  </section>
+      <h3 class="sk-doc-h3">AI agents (MCP)</h3>
+      <p class="sk-doc-body">
+        Expose verification as a tool to Claude Code, Claude Desktop, or Cursor so
+        an agent can check its own SQL rewrites in-loop and revise against a real
+        counterexample instead of guessing.
+      </p>
+      <a href="/integrations" class="btn btn-secondary btn-small">Setup instructions →</a>
+    </section>
 
-  <!-- ================= API reference ================= -->
-  <section style="margin-bottom: 3rem;">
-    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">API reference</h2>
+    <!-- ================= API reference ================= -->
+    <section id="api" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">API reference</h2>
 
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 0.75rem 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.9rem; margin-bottom: 1.25rem;">
-      <strong>POST</strong> /api/verify/text
-    </div>
+      <div class="sk-endpoint"><strong>POST</strong> /api/verify/text</div>
 
-    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">Authentication</h3>
-    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-      Send your key as <code>Authorization: Bearer skm_…</code> or
-      <code>X-API-Key: skm_…</code>. Keys are shown once at creation and stored
-      only as a hash — if you lose one, revoke it and mint another.
-    </p>
+      <h3 class="sk-doc-h3">Authentication</h3>
+      <p class="sk-doc-body">
+        Send your key as <code class="sk-inline-code">Authorization: Bearer skm_…</code>
+        or <code class="sk-inline-code">X-API-Key: skm_…</code>. Keys are shown
+        once at creation and stored only as a hash — if you lose one, revoke it
+        and mint another.
+      </p>
 
-    <h3 style="font-size: 1.05rem; margin: 1.5rem 0 0.5rem;">Request body</h3>
-    <div style="overflow-x: auto;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
-        <thead>
-          <tr style="border-bottom: 2px solid var(--panel-border); text-align: left;">
-            <th style="padding: 0.5rem;">Field</th>
-            <th style="padding: 0.5rem;">Type</th>
-            <th style="padding: 0.5rem;">Default</th>
-            <th style="padding: 0.5rem;">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for f in request_fields %}
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">{{ f.name }}</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary); white-space: nowrap;">{{ f.type }}</td>
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">
-              {%- if f.required -%}
-                <strong>required</strong>
-              {%- elif f.default is none -%}
-                null
-              {%- else -%}
-                {{ f.default }}
-              {%- endif -%}
-            </td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">{{ f.description }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+      <h3 class="sk-doc-h3">Request body</h3>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            {% for f in request_fields %}
+            <tr>
+              <td class="sk-mono sk-nowrap">{{ f.name }}</td>
+              <td class="sk-muted sk-nowrap">{{ f.type }}</td>
+              <td class="sk-mono sk-nowrap">
+                {%- if f.required -%}<strong>required</strong>
+                {%- elif f.default is none -%}null
+                {%- else -%}{{ f.default }}{%- endif -%}
+              </td>
+              <td class="sk-muted">{{ f.description }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
 
-    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Response body</h3>
-    <div style="overflow-x: auto;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
-        <thead>
-          <tr style="border-bottom: 2px solid var(--panel-border); text-align: left;">
-            <th style="padding: 0.5rem;">Field</th>
-            <th style="padding: 0.5rem;">Type</th>
-            <th style="padding: 0.5rem;">Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for f in response_fields %}
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">{{ f.name }}</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary); white-space: nowrap;">{{ f.type }}</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">{{ f.description }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+      <h3 class="sk-doc-h3">Response body</h3>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            {% for f in response_fields %}
+            <tr>
+              <td class="sk-mono sk-nowrap">{{ f.name }}</td>
+              <td class="sk-muted sk-nowrap">{{ f.type }}</td>
+              <td class="sk-muted">{{ f.description }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
 
-    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Status values</h3>
-    <div style="overflow-x: auto;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
-        <tbody>
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">equivalent</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">Proven: no database within the bound distinguishes the two queries.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">divergent</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">The queries disagree. <code>counterexample_db</code> holds a database that proves it, and both outputs are replayed on it.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">unknown</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">The solver ran out of time. <strong>Not a proof of equivalence</strong> — it means we don't know.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border); vertical-align: top;">
-            <td style="padding: 0.5rem; font-family: var(--font-mono); white-space: nowrap;">error</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">The input used SQL outside the supported subset, or the DDL didn't parse. Skolem fails closed rather than silently ignoring what it can't encode.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+      <h3 class="sk-doc-h3">Status values</h3>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <tbody>
+            <tr>
+              <td class="sk-mono sk-nowrap"><span class="sk-v-equivalent">equivalent</span></td>
+              <td class="sk-muted">Proven: no database within the bound distinguishes the two queries.</td>
+            </tr>
+            <tr>
+              <td class="sk-mono sk-nowrap"><span class="sk-v-divergent">divergent</span></td>
+              <td class="sk-muted">The queries disagree. <code class="sk-inline-code">counterexample_db</code> holds a database that proves it, and both outputs are replayed on it.</td>
+            </tr>
+            <tr>
+              <td class="sk-mono sk-nowrap"><span class="sk-v-unknown">unknown</span></td>
+              <td class="sk-muted">The solver ran out of time. <strong>Not a proof of equivalence</strong> — it means we don't know.</td>
+            </tr>
+            <tr>
+              <td class="sk-mono sk-nowrap"><span class="sk-v-error">error</span></td>
+              <td class="sk-muted">The input used SQL outside the supported subset, or the DDL didn't parse. Skolem fails closed rather than silently ignoring what it can't encode.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Example: a divergent result</h3>
-    <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">
-      The quickstart request above returns this — the rewrite silently drops
-      users whose <code>org_id</code> is NULL:
-    </p>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.85rem; overflow-x: auto; white-space: pre; line-height: 1.5;">{
+      <h3 class="sk-doc-h3">Example: a divergent result</h3>
+      <p class="sk-doc-body">
+        The quickstart request above returns this — the rewrite silently drops
+        users whose <code class="sk-inline-code">org_id</code> is NULL:
+      </p>
+<pre class="sk-doc-code">{
   "status": "divergent",
   "divergence_reason": "A row returned by sql_v1 is absent from sql_v2",
   "counterexample_db": {
@@ -163,69 +191,200 @@ skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'</div>
   "error_message": null,
   "explanation": "sql_v2 adds `WHERE org_id IS NOT NULL`. Under three-valued
     logic `NULL IS NOT NULL` is false, so the row is filtered out …"
-}</div>
+}</pre>
 
-    <h3 style="font-size: 1.05rem; margin: 1.75rem 0 0.5rem;">Error responses</h3>
-    <div style="overflow-x: auto;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
-        <tbody>
-          <tr style="border-bottom: 1px solid var(--panel-border);">
-            <td style="padding: 0.5rem; font-family: var(--font-mono);">401</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">Missing, malformed, or revoked API key.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border);">
-            <td style="padding: 0.5rem; font-family: var(--font-mono);">402</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">Free-tier monthly run limit reached. See <a href="/pricing">pricing</a>.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border);">
-            <td style="padding: 0.5rem; font-family: var(--font-mono);">422</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">Body failed validation — a missing field, or a <code>bound</code> above {{ max_bound }}.</td>
-          </tr>
-          <tr style="border-bottom: 1px solid var(--panel-border);">
-            <td style="padding: 0.5rem; font-family: var(--font-mono);">429</td>
-            <td style="padding: 0.5rem; color: var(--text-secondary);">Per-IP rate limit exceeded. Back off and retry.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p style="color: var(--text-secondary); margin-top: 0.75rem; font-size: 0.9rem;">
-      Note that a <code>divergent</code> verdict is still an HTTP <strong>200</strong> —
-      the request succeeded, the queries just aren't equivalent. Only the codes
-      above indicate a failed call.
-    </p>
-  </section>
+      <h3 class="sk-doc-h3">Error responses</h3>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <tbody>
+            <tr><td class="sk-mono">401</td><td class="sk-muted">Missing, malformed, or revoked API key.</td></tr>
+            <tr><td class="sk-mono">402</td><td class="sk-muted">Free-tier monthly run limit reached. See <a href="/pricing">pricing</a>.</td></tr>
+            <tr><td class="sk-mono">422</td><td class="sk-muted">Body failed validation — a missing field, or a <code class="sk-inline-code">bound</code> above {{ max_bound }}.</td></tr>
+            <tr><td class="sk-mono">429</td><td class="sk-muted">Per-IP rate limit exceeded. Back off and retry.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sk-doc-note">
+        Note that a <code class="sk-inline-code">divergent</code> verdict is still
+        an HTTP <strong>200</strong> — the request succeeded, the queries just
+        aren't equivalent. Only the codes above indicate a failed call.
+      </p>
+    </section>
 
-  <!-- ================= Limits ================= -->
-  <section style="margin-bottom: 3rem;">
-    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Limits</h2>
-    <ul style="color: var(--text-secondary); line-height: 1.8; padding-left: 1.25rem;">
-      <li><code>bound</code> caps at <strong>{{ max_bound }}</strong> rows per table.</li>
-      <li><code>timeout_ms</code> defaults to <strong>{{ "{:,}".format(default_timeout_ms) }}</strong> and is clamped to <strong>{{ "{:,}".format(max_timeout_ms) }}</strong>.</li>
-      <li>Uploaded SQL files cap at <strong>{{ max_file_kb }} KB</strong> each.</li>
-      <li>An <code>equivalent</code> verdict is sound <em>within the bound</em> — it rules out every counterexample up to that many rows per table, which covers the overwhelming majority of real rewrite bugs.</li>
-    </ul>
-  </section>
+    <!-- ================= Coverage ================= -->
+    <section id="coverage" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">Coverage</h2>
+      <p class="sk-doc-body">
+        What the encoder handles today. Anything in the
+        <span class="sk-no">rejected</span> column returns
+        <code class="sk-inline-code">error</code> — never a guess, and never a
+        silently dropped clause.
+      </p>
 
-  <!-- ================= SQL subset ================= -->
-  <section>
-    <h2 style="font-size: 1.35rem; margin-bottom: 0.75rem;">Supported SQL</h2>
-    <p style="color: var(--text-secondary); line-height: 1.7; margin-bottom: 1rem;">
-      Skolem handles multi-table join chains mixing <code>INNER</code>,
-      <code>LEFT</code>, <code>RIGHT</code>, and <code>FULL</code> joins,
-      <code>GROUP BY</code> and <code>HAVING</code> with aggregates,
-      three-valued NULL logic, non-recursive CTEs, and uncorrelated
-      <code>IN (SELECT …)</code> subqueries. NULLs, primary keys, foreign keys,
-      and <code>NOT NULL</code> constraints are all modelled.
-    </p>
-    <p style="color: var(--text-secondary); line-height: 1.7;">
-      Anything outside that subset — window functions, <code>UNION</code>,
-      <code>SELECT DISTINCT</code>, <code>LIMIT</code>, correlated subqueries —
-      returns <code>error</code> rather than a guess. That is deliberate: a
-      verifier that quietly skips what it can't encode would report
-      <code>equivalent</code> for queries it never actually checked, which is the
-      one failure mode a proof tool must not have.
-    </p>
-  </section>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table sk-cov-table">
+          <thead>
+            <tr><th>Feature</th><th>Status</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="sk-mono">SELECT / projection</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">column lists and aliases</td></tr>
+            <tr><td class="sk-mono">WHERE / HAVING</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">full AND / OR / NOT trees, three-valued</td></tr>
+            <tr><td class="sk-mono">INNER · LEFT · RIGHT · FULL</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">left-deep chains, single-column equality ON</td></tr>
+            <tr><td class="sk-mono">NULL semantics</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">every cell is (is_null, value)</td></tr>
+            <tr><td class="sk-mono">GROUP BY + HAVING</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">keys may come from any joined table</td></tr>
+            <tr><td class="sk-mono">COUNT(*) · COUNT(col) · SUM</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">COUNT(*) vs COUNT(col) distinguished</td></tr>
+            <tr><td class="sk-mono">Bag multiplicity</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">duplicates are part of the answer</td></tr>
+            <tr><td class="sk-mono">PK · FK · NOT NULL</td><td><span class="sk-ok">encoded</span></td><td class="sk-muted">constrain the counterexample</td></tr>
+            <tr><td class="sk-mono">Non-recursive CTEs</td><td><span class="sk-part">partial</span></td><td class="sk-muted">materialized; fails closed on an outer-join side</td></tr>
+            <tr><td class="sk-mono">IN (SELECT …)</td><td><span class="sk-part">partial</span></td><td class="sk-muted">uncorrelated, single-column body only</td></tr>
+            <tr><td class="sk-mono">TEXT / TIMESTAMP</td><td><span class="sk-part">partial</span></td><td class="sk-muted">equality only — ordering is rejected</td></tr>
+            <tr><td class="sk-mono">ORDER BY</td><td><span class="sk-part">partial</span></td><td class="sk-muted">parsed then ignored (bag semantics)</td></tr>
+            <tr><td class="sk-mono">UNION · DISTINCT · LIMIT</td><td><span class="sk-no">rejected</span></td><td class="sk-muted">not encodable yet</td></tr>
+            <tr><td class="sk-mono">Window functions</td><td><span class="sk-no">rejected</span></td><td class="sk-muted">frames not encodable</td></tr>
+            <tr><td class="sk-mono">EXISTS · correlated subqueries</td><td><span class="sk-no">rejected</span></td><td class="sk-muted">outer-alias references</td></tr>
+            <tr><td class="sk-mono">MIN · MAX · AVG · LIKE · BETWEEN</td><td><span class="sk-no">rejected</span></td><td class="sk-muted">no string/ordering theory in the encoding</td></tr>
+            <tr><td class="sk-mono">CROSS JOIN · self-joins</td><td><span class="sk-no">rejected</span></td><td class="sk-muted">outside the left-deep chain model</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
+    <!-- ================= Bag semantics ================= -->
+    <section id="bags" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">Bag semantics</h2>
+      <p class="sk-doc-body">
+        SQL returns bags, not sets. Duplicate multiplicity is part of the answer,
+        so the encoder compares row counts per distinct tuple — not membership.
+        Two queries returning the same rows in different multiplicities are
+        <code class="sk-inline-code">divergent</code>.
+      </p>
+      <div class="sk-doc-2col">
+        <div class="sk-code-card">
+          <div class="sk-code-head">set thinking (wrong)</div>
+<pre class="sk-code">{(1), (1), (2)} = {(1), (2)}
+<span class="bad">-- would call these equal</span></pre>
+        </div>
+        <div class="sk-code-card">
+          <div class="sk-code-head">bag thinking (Skolem)</div>
+<pre class="sk-code">count(1)=2 vs count(1)=1
+<span class="s">-- divergent: a JOIN duplicated a row</span></pre>
+        </div>
+      </div>
+      <p class="sk-doc-note">
+        <code class="sk-inline-code">ORDER BY</code> is accepted and ignored —
+        equivalence is judged on the bag, not the ordering.
+        <code class="sk-inline-code">SELECT DISTINCT</code> is
+        <strong>rejected</strong>, not silently treated as a set.
+      </p>
+    </section>
+
+    <!-- ================= Three-valued logic ================= -->
+    <section id="nulls" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">Three-valued logic</h2>
+      <p class="sk-doc-body">
+        Every column is encoded as a value plus an is-null flag, and predicates
+        evaluate to true / false / unknown. A <code class="sk-inline-code">WHERE</code>
+        clause keeps a row only on <strong>true</strong> — this is where most LLM
+        rewrites break.
+      </p>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <thead>
+            <tr><th>Expression (cents IS NULL)</th><th>Evaluates to</th><th>Row survives WHERE</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="sk-mono">cents &gt; 100</td><td class="sk-muted">unknown</td><td><span class="sk-v-divergent">no</span></td></tr>
+            <tr><td class="sk-mono">NOT (cents &gt; 100)</td><td class="sk-muted">unknown</td><td><span class="sk-v-divergent">no</span></td></tr>
+            <tr><td class="sk-mono">cents IS NULL</td><td class="sk-muted">true</td><td><span class="sk-v-equivalent">yes</span></td></tr>
+            <tr><td class="sk-mono">cents IS NOT NULL</td><td class="sk-muted">false</td><td><span class="sk-v-divergent">no</span></td></tr>
+            <tr><td class="sk-mono">COUNT(cents)</td><td class="sk-muted">skips NULL rows</td><td class="sk-muted">n/a</td></tr>
+            <tr><td class="sk-mono">COUNT(*)</td><td class="sk-muted">counts NULL-extended rows</td><td class="sk-muted">n/a</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sk-doc-note">
+        The second row is the classic trap: negating a predicate does
+        <em>not</em> recover the rows it filtered out, because
+        <code class="sk-inline-code">NOT unknown</code> is still
+        <code class="sk-inline-code">unknown</code>.
+      </p>
+    </section>
+
+    <!-- ================= Bounds ================= -->
+    <section id="bounds" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">Bounds &amp; completeness</h2>
+      <p class="sk-doc-body">
+        Verification is <em>bounded</em>: the solver searches databases of at most
+        k rows per table. This is the honest limit of the tool, and the reason an
+        <code class="sk-inline-code">equivalent</code> verdict is always reported
+        with its bound attached.
+      </p>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <thead>
+            <tr><th>Bound</th><th>Typically catches</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="sk-mono sk-b-k">1</td><td class="sk-muted">projection and predicate mistakes</td></tr>
+            <tr><td class="sk-mono sk-b-k">2</td><td class="sk-muted">duplicate or lost rows from a JOIN change</td></tr>
+            <tr><td class="sk-mono sk-b-k">{{ default_bound }}</td><td class="sk-muted">grouping and NULL-extension bugs — <strong>the default</strong></td></tr>
+            <tr><td class="sk-mono sk-b-k">{{ max_bound }}</td><td class="sk-muted">multi-table and dedup edge cases; the ceiling</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sk-doc-body">
+        In practice <strong>small-model bias</strong> does the work: join,
+        grouping and NULL bugs almost always have a two- or three-row witness.
+        Cost grows roughly <code class="sk-inline-code">bound<sup>tables joined</sup></code>,
+        so a raised bound on a deep chain can exhaust the timeout and return
+        <code class="sk-inline-code">unknown</code> — which is not a pass.
+      </p>
+      <p class="sk-doc-note">
+        The integer value domain is also finite, widened automatically to cover
+        every numeric literal in the two queries. An
+        <code class="sk-inline-code">equivalent</code> verdict is sound within
+        that window.
+      </p>
+    </section>
+
+    <!-- ================= CLI ================= -->
+    <section id="cli" class="sk-doc-sec">
+      <h2 class="sk-doc-h2">CLI flags</h2>
+<pre class="sk-doc-code"><span class="s">$</span> skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
+<span class="s">$</span> skolem diff --base origin/main --ddl migrations/ 'queries/*.sql'</pre>
+      <div class="sk-doc-tablewrap">
+        <table class="sk-doc-table">
+          <tbody>
+            <tr><td class="sk-mono sk-flag">--ddl PATH</td><td class="sk-muted">schema file. For <code class="sk-inline-code">diff</code>, also a directory or glob — a directory concatenates in numeric Flyway <code class="sk-inline-code">V&lt;n&gt;__</code> order.</td></tr>
+            <tr><td class="sk-mono sk-flag">--v1 / --v2 PATH</td><td class="sk-muted"><code class="sk-inline-code">verify</code> only. Either may be <code class="sk-inline-code">-</code> for stdin (at most one).</td></tr>
+            <tr><td class="sk-mono sk-flag">--base REF</td><td class="sk-muted"><code class="sk-inline-code">diff</code> only. Compares the working tree against <code class="sk-inline-code">git merge-base REF HEAD</code>.</td></tr>
+            <tr><td class="sk-mono sk-flag">--bound K</td><td class="sk-muted">rows per table, 1–{{ max_bound }} (default {{ default_bound }})</td></tr>
+            <tr><td class="sk-mono sk-flag">--timeout-ms MS</td><td class="sk-muted">solver budget, clamped to {{ "{:,}".format(max_timeout_ms) }}</td></tr>
+            <tr><td class="sk-mono sk-flag">--dialect NAME</td><td class="sk-muted">generic | postgres | mysql | sqlite</td></tr>
+            <tr><td class="sk-mono sk-flag">--fail-on LIST</td><td class="sk-muted">which statuses fail the gate (default <code class="sk-inline-code">divergent</code>)</td></tr>
+            <tr><td class="sk-mono sk-flag">--output MODE</td><td class="sk-muted">auto | human | json | github</td></tr>
+            <tr><td class="sk-mono sk-flag">--project ID</td><td class="sk-muted">tag the run with a project</td></tr>
+            <tr><td class="sk-mono sk-flag">--url / --api-key</td><td class="sk-muted">override <code class="sk-inline-code">SKOLEM_URL</code> / <code class="sk-inline-code">SKOLEM_API_KEY</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="sk-doc-note">
+        Exit codes and pipeline wiring are covered on
+        <a href="/integrations">integrations</a>.
+      </p>
+    </section>
+
+    <!-- ================= Limits ================= -->
+    <section id="limits" class="sk-doc-sec sk-doc-sec-last">
+      <h2 class="sk-doc-h2">Limits</h2>
+      <ul class="sk-doc-list">
+        <li><code class="sk-inline-code">bound</code> caps at <strong>{{ max_bound }}</strong> rows per table.</li>
+        <li><code class="sk-inline-code">timeout_ms</code> defaults to <strong>{{ "{:,}".format(default_timeout_ms) }}</strong> and is clamped to <strong>{{ "{:,}".format(max_timeout_ms) }}</strong>.</li>
+        <li>Uploaded SQL files cap at <strong>{{ max_file_kb }} KB</strong> each.</li>
+        <li>An <code class="sk-inline-code">equivalent</code> verdict is sound <em>within the bound</em> — it rules out every counterexample up to that many rows per table, which covers the overwhelming majority of real rewrite bugs.</li>
+      </ul>
+    </section>
+
+  </main>
 </div>
 {% endblock %}

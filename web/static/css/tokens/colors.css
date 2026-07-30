@@ -1,0 +1,73 @@
+/* Skolem — Color tokens
+ *
+ * Ported verbatim from the "SQLVerify Design System" Claude Design project
+ * (tokens/colors.css). Do not hand-edit values here to fix a one-off: change
+ * the design system and re-port, or the two drift and the next port silently
+ * reverts your fix.
+ *
+ * Dark-first developer tool palette. Base values below; semantic aliases at bottom.
+ */
+:root {
+  /* ── Surfaces (near-black, layered lighter as you come forward) ── */
+  --bg-color: #0e0e10;      /* app background — very dark, almost black */
+  --panel-bg: #18181b;      /* raised panels / cards */
+  --panel-bg-2: #1e1e22;    /* popular-card gradient top / hover fill */
+  --panel-border: #27272a;  /* hairline borders, dividers */
+
+  /* ── Text ── */
+  --text-primary: #f4f4f5;   /* near-white — headings, body, input text */
+  --text-secondary: #a1a1aa; /* muted — labels, captions, secondary UI */
+
+  /* ── Brand accents ── */
+  --accent-color: #3b82f6;   /* primary blue — links, active tab, focus ring */
+  --accent-hover: #2563eb;   /* blue pressed / hover */
+  --accent-blue-300: #60a5fa;/* lighter blue — gradient start, tag text */
+  --accent-purple: #a855f7;  /* secondary purple — gradient end, FK tags */
+  --accent-purple-300: #c084fc;
+
+  /* ── Status ── */
+  --status-green: #22c55e;   /* equivalent / pass */
+  --status-red: #ef4444;     /* divergent / error */
+  --status-yellow: #eab308;  /* unknown / timeout */
+  --status-green-bg: rgba(34, 197, 94, 0.1);
+  --status-red-bg: rgba(239, 68, 68, 0.1);
+  --status-yellow-bg: rgba(234, 179, 8, 0.1);
+  --status-green-300: #4ade80;
+  --status-red-300: #f87171;
+
+  /* ── GitHub button (auth) ── */
+  --github-bg: #24292e;
+  --github-bg-hover: #2d333b;
+  --github-border: #444c56;
+  --github-border-hover: #768390;
+
+  /* ── Semantic aliases ── */
+  --surface-app: var(--bg-color);
+  --surface-card: var(--panel-bg);
+  --surface-input: rgba(24, 24, 27, 0.6);
+  --border-default: var(--panel-border);
+  --border-strong: var(--text-secondary);
+  --text-body: var(--text-primary);
+  --text-muted: var(--text-secondary);
+  --ring-focus: rgba(59, 130, 246, 0.2);
+
+  /* Gradient — the signature blue→purple brand sweep */
+  --gradient-brand: linear-gradient(135deg, #60a5fa 0%, #c084fc 100%);
+  --gradient-brand-btn: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+
+  /* ── Repo-local, NOT from the design system ──
+   * The app has destructive actions (revoke key, delete project) that the
+   * design system has no component for. Keyed off the status red so a palette
+   * re-port keeps them in family. */
+  --danger-color: var(--status-red);
+  --danger-hover: #dc2626;
+
+  /* The marketing pages (landing, pricing) use two shades the design system's
+   * token file never named, because its own page templates hardcoded them:
+   * a console chrome one step darker than --bg-color, and a dim grey below
+   * --text-secondary for comments and disabled rows. Naming them here stops
+   * every new marketing section from re-inlining the same two hexes. If the
+   * design system ever names them, delete these and re-port. */
+  --bg-deep: #0b0b0d;
+  --text-dim: #52565f;
+}

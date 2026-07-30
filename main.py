@@ -29,6 +29,7 @@ load_dotenv()
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+import z3
 
 from core.logger import setup_logging
 from core.analytics import init_analytics, shutdown_analytics
@@ -42,6 +43,10 @@ from api.verify import (
     MAX_FILE_BYTES,
     MAX_TIMEOUT_MS,
     CICD_TIMEOUT_MS,
+    DEFAULT_BOUND,
+    WEB_TIMEOUT_MS,
+    WEB_MAX_TIMEOUT_MS,
+    FREE_TIER_MONTHLY_LIMIT,
 )
 from api.auth import router as auth_router
 from api.keys import router as keys_router
@@ -180,8 +185,13 @@ def _csp_header(nonce: str) -> str:
     return "; ".join((
         "default-src 'self'",
         f"script-src 'self' 'nonce-{nonce}' https://unpkg.com",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-        "font-src 'self' https://fonts.gstatic.com",
+        # Fonts are self-hosted (web/static/fonts + tokens/fonts.css), so
+        # fonts.googleapis.com and fonts.gstatic.com are gone from both
+        # directives — one fewer third party able to see every visitor's IP and
+        # User-Agent, and one fewer origin that could serve us CSS. 'unsafe-inline'
+        # stays only for the inline style="" attributes the templates still use.
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self'",
         "img-src 'self' data:",
         "connect-src 'self'",
         "object-src 'none'",
@@ -336,10 +346,14 @@ async def robots_txt():
 # Either route would stamp all six pages with today's date on every deploy,
 # which is exactly the self-defeating pattern described above.
 _SITEMAP_PAGES = [
-    ("/",             "2026-07-27"),
-    ("/docs",         "2026-07-27"),
-    ("/integrations", "2026-07-27"),
-    ("/pricing",      "2026-07-07"),
+    # Bumped 2026-07-30: landing, pricing, docs and integrations were all
+    # rewritten in the design-system port (new content, not just restyling).
+    # terms/privacy are untouched and keep their dates — bumping those too is
+    # exactly the noise that teaches Google to ignore lastmod site-wide.
+    ("/",             "2026-07-30"),
+    ("/docs",         "2026-07-30"),
+    ("/integrations", "2026-07-30"),
+    ("/pricing",      "2026-07-30"),
     ("/terms",        "2026-06-20"),
     ("/privacy",      "2026-06-20"),
 ]
@@ -359,13 +373,27 @@ async def sitemap_xml():
     return Response(content=body, media_type="application/xml")
 
 
+# The landing page states the solver version and the engine's real limits
+# instead of hardcoding them into the markup — the design mockup carried
+# invented figures (z3 4.13.0, "bound 1–8"), and a marketing claim that drifts
+# from the engine is worse than no claim on a product selling correctness.
+# Resolved once at import; z3 is already loaded via api.verify → core.
+_Z3_VERSION = z3.get_version_string()
+
+
 @app.get("/")
 async def root(request: Request):
     user_email = getattr(request.state, "user_email", None)
     return templates.TemplateResponse(
-        request=request, 
-        name="landing.html", 
-        context={"user_email": user_email}
+        request=request,
+        name="landing.html",
+        context={
+            "user_email": user_email,
+            "z3_version": _Z3_VERSION,
+            "default_bound": DEFAULT_BOUND,
+            "max_bound": MAX_BOUND,
+            "free_tier_limit": FREE_TIER_MONTHLY_LIMIT,
+        },
     )
 
 
@@ -379,17 +407,43 @@ async def verify_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="verify.html",
-        context={"user_email": user_email, "projects": projects},
+        context={
+            "user_email": user_email,
+            "projects": projects,
+            # Advanced settings are rendered from the server's own limits rather
+            # than hand-written options, so a change to MAX_BOUND or the web
+            # timeout ceiling can never leave the form offering a value the
+            # endpoint would 422 on.
+            "default_bound": DEFAULT_BOUND,
+            "max_bound": MAX_BOUND,
+            "default_timeout_ms": WEB_TIMEOUT_MS,
+            "max_timeout_ms": WEB_MAX_TIMEOUT_MS,
+        },
     )
 
 
 @app.get("/pricing")
 async def pricing_page(request: Request):
     user_email = getattr(request.state, "user_email", None)
+    # Same rule as the landing page: a pricing page states what the code
+    # enforces, so the numbers come from the quota gate and the encoder rather
+    # than from the markup. The free limit in particular is env-tunable
+    # (FREE_TIER_MONTHLY_LIMIT) — a hardcoded "100" here would start lying the
+    # first time that env var is changed on Render, on the one page where a
+    # wrong number is a billing dispute.
     return templates.TemplateResponse(
         request=request,
         name="pricing.html",
-        context={"user_email": user_email},
+        context={
+            "user_email": user_email,
+            "free_tier_limit": FREE_TIER_MONTHLY_LIMIT,
+            "default_bound": DEFAULT_BOUND,
+            "max_bound": MAX_BOUND,
+            "web_timeout_s": WEB_TIMEOUT_MS // 1000,
+            "web_max_timeout_s": WEB_MAX_TIMEOUT_MS // 1000,
+            "ci_timeout_s": CICD_TIMEOUT_MS // 1000,
+            "ci_max_timeout_s": MAX_TIMEOUT_MS // 1000,
+        },
     )
 
 
@@ -511,6 +565,10 @@ async def docs_page(request: Request):
             "max_timeout_ms": MAX_TIMEOUT_MS,
             "default_timeout_ms": CICD_TIMEOUT_MS,
             "max_file_kb": MAX_FILE_BYTES // 1024,
+            # The semantics reference quotes the default bound and the solver
+            # version in prose; both come from the engine so the page can't drift.
+            "default_bound": DEFAULT_BOUND,
+            "z3_version": _Z3_VERSION,
         },
     )
 

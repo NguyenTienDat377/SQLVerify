@@ -62,13 +62,12 @@
       }
     </script>
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Fonts: self-hosted from /static/fonts via tokens/fonts.css. Preloaded —
+         see the note in base.html. The variable Inter face covers the 800 weight
+         this page's hero uses, which the old Google request had to ask for
+         explicitly. -->
+    <link rel="preload" href="/static/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/fonts/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
 
     <!-- CSS -->
     <link rel="stylesheet" href="/static/css/styles.css?v=1.1" />
@@ -81,416 +80,557 @@
     ></script>
   </head>
   <body class="landing-page">
-    <div class="landing-container">
-      <!-- Landing Navbar -->
-      <nav class="landing-nav">
-        <div class="landing-logo">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="28"
-            height="28"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            class="logo-icon"
-          >
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-          </svg>
-          <span>Skolem</span>
-        </div>
-        <div class="landing-nav-links">
-          <a href="#features">Features</a>
-          <a href="#how-it-works">How it Works</a>
-          <a href="/pricing">Pricing</a>
-          {% if user_email %}
-          <a href="/verify" class="btn btn-primary btn-glow">Dashboard</a>
-          {% else %}
-          <a href="/auth/login" class="btn btn-primary btn-glow"
-            >Start Verifying</a
-          >
-          {% endif %}
-        </div>
-      </nav>
+    <!-- Landing page. Every capability claim below is checked against the
+         engine: the coverage matrix mirrors core/sql_encoder.py, the API panel
+         mirrors POST /api/verify/text + VerifyResponse, and the solver version
+         and limits are injected by root() in main.py. Skolem sells provable
+         correctness — do not restore a figure here that the code can't back.
+         See CLAUDE.md § "Landing page" before editing. -->
 
-      <!-- Hero Section -->
-      <header class="hero">
-        <div class="hero-content">
-          <div class="hero-badge">Next-Gen Database Reliability</div>
-          <h1 class="hero-title">
-            Formal Verification for <br />
-            <span class="gradient-text">AI-Generated SQL</span>
-          </h1>
-          <p class="hero-subtitle">
-            Catch semantic errors, prevent data corruption, and ensure exact
-            equivalence between your trusted migrations and AI-generated
-            queries. Powered by Z3 Theorem Prover.
-          </p>
-          <div class="hero-actions">
+    <!-- Status strip -->
+    <div class="sk-strip">
+      <div class="sk-strip-group">
+        <span class="sk-strip-live"><span class="sk-dot"></span>solver online</span>
+        <span>z3 {{ z3_version }}</span>
+        <span>bag semantics</span>
+        <span>dialects: generic · postgres · mysql · sqlite</span>
+      </div>
+      <div class="sk-strip-group sk-strip-right">
+        <span>bound 1–{{ max_bound }}</span>
+        <span>fail-closed on unsupported SQL</span>
+      </div>
+    </div>
+
+    <!-- Nav -->
+    <nav class="sk-nav">
+      <div class="sk-nav-left">
+        <a href="/" class="sk-brand">
+          <span class="sk-brand-mark">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          </span>
+          Skolem
+        </a>
+        <div class="sk-nav-links">
+          <a href="#proof">/how-it-works</a>
+          <a href="#counterexample">/counterexamples</a>
+          <a href="#coverage">/coverage</a>
+          <a href="#api">/api</a>
+          <a href="/integrations">/integrations</a>
+          <a href="/pricing">/pricing</a>
+        </div>
+      </div>
+      <div class="sk-nav-right">
+        <a href="https://github.com/NguyenTienDat377/SQLVerify" class="sk-ghost-link" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.38 7.86 10.9.58.1.79-.25.79-.55v-1.9c-3.2.7-3.88-1.54-3.88-1.54-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.78 1.2 1.78 1.2 1.03 1.77 2.7 1.26 3.36.97.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .96-.31 3.15 1.18a10.9 10.9 0 0 1 5.74 0c2.18-1.49 3.14-1.18 3.14-1.18.63 1.59.23 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.69.41.36.77 1.06.77 2.14v3.17c0 .31.21.66.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"></path></svg>
+          GitHub
+        </a>
+        {% if user_email %}
+        <a href="/verify" class="btn btn-primary btn-glow">Open workspace</a>
+        {% else %}
+        <a href="/auth/login" class="btn btn-primary btn-glow">Open workspace</a>
+        {% endif %}
+      </div>
+    </nav>
+
+    <!-- Hero -->
+    <header class="sk-hero">
+      <div class="sk-hero-copy">
+        <div class="sk-eyebrow">SMT-backed equivalence checking</div>
+        <h1 class="sk-h1">
+          Don't test the<br />rewrite.
+          <span class="gradient-text">Prove it.</span>
+        </h1>
+        <p class="sk-lede">
+          Skolem compiles both queries to SMT constraints and asks Z3 whether a
+          database exists where they disagree. If one does, you get that
+          database — every row, every NULL.
+        </p>
+
+        <div class="sk-install">
+          <div class="sk-install-cmd">
+            <span class="sk-prompt">$</span>
+            <span class="sk-cmd">pipx install ./cli</span>
+            <span class="sk-install-hint">skolem verify · skolem diff</span>
+          </div>
+          <div class="sk-install-note">
+            or wire it into CI and your coding agent — see
+            <a href="/integrations">/integrations</a>
+          </div>
+        </div>
+
+        <div class="sk-hero-actions">
+          <div class="sk-hero-buttons">
             {% if user_email %}
-            <a href="/verify" class="btn btn-primary btn-large btn-glow">
-              Go to Dashboard
-            </a>
+            <a href="/verify" class="btn btn-primary btn-large btn-glow">Go to workspace</a>
             {% else %}
             <a href="/auth/login" class="btn btn-github btn-large">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
-                <path
-                  d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"
-                />
-              </svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
               Sign in with GitHub
             </a>
             {% endif %}
-            <a href="#features" class="btn btn-secondary btn-large"
-              >Learn More</a
-            >
+            <a href="/docs" class="btn btn-secondary btn-large">Read the docs</a>
+          </div>
+
+          {% if not user_email %}
+          <div class="sk-or">
+            <span class="sk-rule"></span><span class="sk-or-label">or</span><span class="sk-rule"></span>
           </div>
           <form
-            class="magic-link-form inline-form"
+            class="sk-magic inline-form"
             hx-post="/auth/magic-link"
             hx-target="#magic-link-msg"
             hx-swap="innerHTML"
-            style="margin: 2rem 0 0 0; max-width: 460px"
           >
             <input
               type="email"
               name="email"
-              placeholder="name@company.com"
+              placeholder="you@company.com"
               required
               aria-label="Email address"
-              class="form-input"
-              style="padding: 0.875rem 1.25rem; font-size: 1rem"
+              class="form-input sk-magic-input"
             />
-            <button
-              type="submit"
-              class="btn btn-primary btn-large"
-              style="white-space: nowrap"
-            >
+            <button type="submit" class="btn btn-primary btn-large sk-magic-btn">
               Email me a link
             </button>
           </form>
-          <div
-            id="magic-link-msg"
-            style="
-              margin-top: 0.5rem;
-              color: var(--text-secondary);
-              font-size: 0.9rem;
-            "
-          ></div>
+          <div class="sk-fineprint">
+            passwordless — one-time magic link, no credentials stored
+          </div>
+          <div id="magic-link-msg" class="sk-magic-msg"></div>
+          {% endif %}
         </div>
-        <div class="hero-visual">
-          <div class="hero-image-wrapper">
-            <div class="glow-backdrop"></div>
-            <img
-              src="/static/img/hero.png"
-              alt="Skolem Analysis Interface"
-              class="hero-image"
-            />
+      </div>
+
+      <!-- Proof console -->
+      <div class="sk-console">
+        <div class="sk-console-tabs" role="tablist" aria-label="Proof console">
+          <button
+            type="button"
+            class="sk-tab is-active"
+            role="tab"
+            aria-selected="true"
+            aria-controls="sk-view-session"
+            data-sk-view="session"
+          >session.skolem</button>
+          <button
+            type="button"
+            class="sk-tab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="sk-view-schema"
+            data-sk-view="schema"
+          >schema.ddl</button>
+          <span class="sk-tab sk-tab-meta">bound = {{ default_bound }}</span>
+        </div>
+
+        <div id="sk-view-session" role="tabpanel">
+        <div class="sk-console-panes">
+          <div class="sk-pane sk-pane-left">
+            <div class="sk-pane-head"><span class="sk-dot sk-dot-muted"></span>original.sql</div>
+<pre class="sk-code"><span class="k">SELECT</span> u.id, <span class="f">COUNT</span>(o.id)
+<span class="k">FROM</span> users u
+<span class="k">LEFT JOIN</span> orders o
+  <span class="k">ON</span> o.user_id = u.id
+<span class="k">GROUP BY</span> u.id;</pre>
+          </div>
+          <div class="sk-pane">
+            <div class="sk-pane-head">
+              <span class="sk-dot sk-dot-purple"></span>rewrite.sql
+              <span class="sk-pane-tag">· llm</span>
+            </div>
+<pre class="sk-code"><span class="k">SELECT</span> u.id, <span class="f">COUNT</span>(<span class="bad">*</span>)
+<span class="k">FROM</span> users u
+<span class="bad">JOIN</span> orders o
+  <span class="k">ON</span> o.user_id = u.id
+<span class="k">GROUP BY</span> u.id;</pre>
           </div>
         </div>
-      </header>
 
-      <!-- Features Section -->
-      <section id="features" class="features">
-        <div class="section-header">
-          <h2>Why Skolem?</h2>
-          <p>
-            Move fast with AI coding tools without compromising database
-            integrity.
+        <div class="sk-console-run">
+          <div class="sk-run-bar">
+            <span class="sk-prompt">$</span>
+            <span class="sk-cmd">skolem verify --bound {{ default_bound }}</span>
+            <button type="button" id="sk-run-proof" class="sk-run-btn">Run proof</button>
+          </div>
+          <div id="sk-trace" class="sk-trace">
+            <div class="sk-trace-line"><span class="sk-trace-n"></span><span class="sk-trace-idle">ready — press Run proof to encode both queries</span></div>
+          </div>
+          <div id="sk-verdict" class="sk-verdict" hidden>
+            <span class="status-badge status-divergent">DIVERGENT</span>
+            <span class="sk-verdict-note">counterexample found — see <a href="#counterexample">/counterexamples</a></span>
+          </div>
+        </div>
+        </div>
+
+        <!-- schema.ddl tab. The DDL is the one the two queries above are
+             verified against, and the same schema the counterexample section
+             fills in: users(2) / orders(1). Keep the three in sync — a visitor
+             reading top-to-bottom is checking our arithmetic. -->
+        <div id="sk-view-schema" class="sk-schema-view" role="tabpanel" hidden>
+          <div class="sk-pane-head">
+            <span class="sk-dot sk-dot-muted"></span>V1__users_orders.sql
+            <span class="sk-pane-tag">· flyway migration</span>
+          </div>
+<pre class="sk-code sk-code-tall"><span class="k">CREATE TABLE</span> users (
+  id    <span class="f">INT</span>  <span class="k">PRIMARY KEY</span>,
+  name  <span class="f">TEXT</span> <span class="k">NOT NULL</span>
+);
+
+<span class="k">CREATE TABLE</span> orders (
+  id       <span class="f">INT</span> <span class="k">PRIMARY KEY</span>,
+  user_id  <span class="f">INT</span> <span class="k">NOT NULL</span> <span class="k">REFERENCES</span> users(id),
+  cents    <span class="f">INT</span> <span class="k">NOT NULL</span>
+);</pre>
+          <div class="sk-schema-note">
+            <span class="c">--</span> keys and NOT NULL become Z3 assertions: the solver may only
+            build databases your schema actually permits, so a counterexample is
+            never one your production data could not contain.
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Anatomy of a proof -->
+    <section id="proof" class="sk-section">
+      <div class="sk-section-head">
+        <h2 class="sk-h2">Anatomy of a proof</h2>
+        <span class="sk-comment">// six stages, no test data involved</span>
+      </div>
+      <div class="sk-stages">
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-blue">01 · parse</div>
+          <div class="sk-stage-t">SQL → AST</div>
+          <p>Dialect-aware parse of both queries, plus your Flyway DDL with every <code>ALTER TABLE</code> folded in.</p>
+        </div>
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-blue">02 · normalize</div>
+          <div class="sk-stage-t">Relational algebra</div>
+          <p>Bag semantics preserved — duplicates are part of the meaning, so multiplicity is compared, not just membership.</p>
+        </div>
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-purple">03 · encode</div>
+          <div class="sk-stage-t">SMT constraints</div>
+          <p>Schema, keys and three-valued logic become Z3 assertions. Each cell is an <code>(is_null, value)</code> pair.</p>
+        </div>
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-purple">04 · solve</div>
+          <div class="sk-stage-t">Z3 satisfiability</div>
+          <p>Ask for a database where the outputs differ, bounded to k rows per table.</p>
+        </div>
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-green">05 · verdict</div>
+          <div class="sk-stage-t">unsat = equivalent</div>
+          <p>No such database exists within the bound — or here is one, printed as rows you can paste.</p>
+        </div>
+        <div class="sk-stage">
+          <div class="sk-stage-n sk-green">06 · cross-check</div>
+          <div class="sk-stage-t">Replay on SQLite</div>
+          <p>Every counterexample is re-run on a real SQLite database. If the outputs agree after all, we report an internal error rather than show you a fake.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Counterexample -->
+    <section id="counterexample" class="sk-section">
+      <div class="sk-cx">
+        <div class="sk-cx-copy">
+          <div class="sk-kicker">Counterexample database</div>
+          <h2 class="sk-h2">A failing test you didn't have to write</h2>
+          <p class="sk-body">
+            The <code class="sk-inline-code">LEFT JOIN → JOIN</code> rewrite drops
+            users with no orders. Two rows are enough to prove it, and Skolem
+            hands you those two rows.
+          </p>
+          <div class="sk-tags">
+            <span class="schema-tag">PK</span>
+            <span class="schema-tag">FK</span>
+            <span class="schema-tag">NN</span>
+            <span class="sk-tags-note">constraints honoured in the model</span>
+          </div>
+        </div>
+
+        <div class="sk-cx-data">
+          <div class="sk-cx-row">
+            <div class="sk-table-card">
+              <div class="sk-table-head">users</div>
+              <table class="table-styled">
+                <thead><tr><th>id</th><th>name</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>ada</td></tr>
+                  <tr><td>2</td><td>lin</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="sk-table-card">
+              <div class="sk-table-head">orders</div>
+              <table class="table-styled">
+                <thead><tr><th>id</th><th>user_id</th><th>cents</th></tr></thead>
+                <tbody>
+                  <tr><td>10</td><td>1</td><td>4900</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="sk-cx-row">
+            <div class="sk-out sk-out-ok">
+              <div class="sk-out-head"><span>original.sql output</span><span>2 rows</span></div>
+              <table class="table-styled">
+                <thead><tr><th>u.id</th><th>count</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>1</td></tr>
+                  <tr><td>2</td><td>0</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="sk-out sk-out-bad">
+              <div class="sk-out-head"><span>rewrite.sql output</span><span>1 row — u=2 lost</span></div>
+              <table class="table-styled">
+                <thead><tr><th>u.id</th><th>count</th></tr></thead>
+                <tbody>
+                  <tr><td>1</td><td>1</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+<pre class="sk-repro"><span class="c">-- reproduce locally</span>
+<span class="k">INSERT INTO</span> users <span class="k">VALUES</span> (1, <span class="s">'ada'</span>), (2, <span class="s">'lin'</span>);
+<span class="k">INSERT INTO</span> orders <span class="k">VALUES</span> (10, 1, 4900);</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Coverage -->
+    <section id="coverage" class="sk-section">
+      <div class="sk-section-head">
+        <h2 class="sk-h2">Verification coverage</h2>
+        <span class="sk-comment">// what the encoder handles today</span>
+      </div>
+      <div class="sk-cover">
+        <div class="sk-cov"><span>SELECT / projection</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>WHERE / HAVING (3-valued)</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>INNER · LEFT · RIGHT · FULL</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>NULL semantics</span><span class="sk-ok">encoded</span></div>
+
+        <div class="sk-cov"><span>GROUP BY + HAVING</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>COUNT(*) · COUNT(col) · SUM</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>Bag multiplicity</span><span class="sk-ok">encoded</span></div>
+        <div class="sk-cov"><span>PK · FK · NOT NULL</span><span class="sk-ok">encoded</span></div>
+
+        <div class="sk-cov"><span>Non-recursive CTEs</span><span class="sk-part">partial</span></div>
+        <div class="sk-cov"><span>IN (SELECT …) uncorrelated</span><span class="sk-part">partial</span></div>
+        <div class="sk-cov"><span>TEXT / TIMESTAMP</span><span class="sk-part">equality only</span></div>
+        <div class="sk-cov"><span>ORDER BY</span><span class="sk-part">parsed, ignored</span></div>
+
+        <div class="sk-cov"><span>UNION · DISTINCT · LIMIT</span><span class="sk-no">rejected</span></div>
+        <div class="sk-cov"><span>Window functions</span><span class="sk-no">rejected</span></div>
+        <div class="sk-cov"><span>EXISTS · correlated subqueries</span><span class="sk-no">rejected</span></div>
+        <div class="sk-cov"><span>MIN · MAX · AVG · LIKE</span><span class="sk-no">rejected</span></div>
+      </div>
+      <div class="sk-legend">
+        <span><span class="sk-ok">encoded</span> — proved for every database within the bound</span>
+        <span><span class="sk-part">partial</span> — supported subset, limits documented</span>
+        <span><span class="sk-no">rejected</span> — refused outright, never guessed</span>
+      </div>
+      <p class="sk-legend-note">
+        Anything outside the subset raises an error instead of being silently
+        dropped. A skipped predicate would weaken the encoding and could return
+        a false “equivalent” — the one failure mode a verifier must not have.
+      </p>
+    </section>
+
+    <!-- API -->
+    <section id="api" class="sk-section">
+      <div class="sk-api">
+        <div class="sk-api-copy">
+          <div class="sk-kicker">CI/CD API</div>
+          <h2 class="sk-h2">One engine, three surfaces</h2>
+          <p class="sk-body">
+            The workspace, the <code class="sk-inline-code">skolem</code> CLI and
+            the MCP server all call the same solver. Gate a pull request on
+            <code class="sk-inline-code">status == "equivalent"</code> and let the
+            counterexample land in the PR comment.
+          </p>
+          <div class="sk-code-card">
+            <div class="sk-code-head">POST /api/verify/text</div>
+<pre class="sk-code"><span class="s">curl</span> -X POST {{ site_url }}/api/verify/text \
+  -H <span class="s">"Authorization: Bearer $SKOLEM_API_KEY"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{
+    "ddl_sql": "CREATE TABLE users (...);",
+    "sql_v1":  "SELECT ...",
+    "sql_v2":  "SELECT ...",
+    "bound":   {{ default_bound }}
+  }'</span></pre>
+          </div>
+        </div>
+        <div class="sk-code-card sk-api-response">
+          <div class="sk-code-head">
+            <span>200 OK · response.json</span>
+            <span class="sk-exit">skolem verify → exit 1</span>
+          </div>
+<pre class="sk-code">{
+  <span class="key">"status"</span>: <span class="bad">"divergent"</span>,
+  <span class="key">"divergence_reason"</span>: <span class="s">"row presence differs"</span>,
+  <span class="key">"counterexample_db"</span>: {
+    <span class="key">"users"</span>:  [[1, <span class="s">"ada"</span>], [2, <span class="s">"lin"</span>]],
+    <span class="key">"orders"</span>: [[10, 1, 4900]]
+  },
+  <span class="key">"query_v1_output"</span>: [[1, 1], [2, 0]],
+  <span class="key">"query_v2_output"</span>: [[1, 1]],
+  <span class="key">"explanation"</span>: <span class="s">"The rewrite turns the LEFT JOIN…"</span>
+}</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="sk-section sk-section-last">
+      <div class="sk-cta">
+        <div class="sk-cta-copy">
+          <h2 class="sk-h2 sk-cta-h">Ship the rewrite with a proof attached.</h2>
+          <p class="sk-body">
+            Free for solo projects and open source. No database credentials
+            required — Skolem only reads your schema and your SQL.
           </p>
         </div>
-        <div class="features-grid">
-          <div class="feature-card glass-panel">
-            <div class="feature-icon bg-blue">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                <polyline points="2 17 12 22 22 17"></polyline>
-                <polyline points="2 12 12 17 22 12"></polyline>
-              </svg>
-            </div>
-            <h3>Mathematical Proofs</h3>
-            <p>
-              We don't just run test cases. We use the Z3 Theorem Prover to
-              mathematically guarantee equivalence across all possible data
-              states.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div class="feature-icon bg-purple">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path
-                  d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-                ></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
-              </svg>
-            </div>
-            <h3>Schema Aware</h3>
-            <p>
-              Upload your Flyway DDL migrations. Our verifier constraints the
-              state space exactly to your existing database schema.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div class="feature-icon bg-green">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path
-                  d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
-                ></path>
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                <line x1="12" y1="22.08" x2="12" y2="12"></line>
-              </svg>
-            </div>
-            <h3>Counterexample Database</h3>
-            <p>
-              Automatically generate a minimal, concrete database state that
-              proves exactly why two queries return different results.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div
-              class="feature-icon bg-purple"
-              style="background: rgba(236, 72, 153, 0.1); color: #ec4899"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path
-                  d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
-                ></path>
-              </svg>
-            </div>
-            <h3>AI Explanations</h3>
-            <p>
-              When queries diverge, receive clear, natural-language explanations
-              of the semantic differences.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div
-              class="feature-icon bg-blue"
-              style="background: rgba(255, 153, 0, 0.1); color: #ff9900"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-                <rect x="9" y="9" width="6" height="6"></rect>
-                <line x1="9" y1="1" x2="9" y2="4"></line>
-                <line x1="15" y1="1" x2="15" y2="4"></line>
-                <line x1="9" y1="20" x2="9" y2="23"></line>
-                <line x1="15" y1="20" x2="15" y2="23"></line>
-                <line x1="20" y1="9" x2="23" y2="9"></line>
-                <line x1="20" y1="14" x2="23" y2="14"></line>
-                <line x1="1" y1="9" x2="4" y2="9"></line>
-                <line x1="1" y1="14" x2="4" y2="14"></line>
-              </svg>
-            </div>
-            <h3>Developer First</h3>
-            <p>
-              Automate verification in CI/CD with our CLI, or integrate directly
-              into your IDE using our Model Context Protocol (MCP) server.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div
-              class="feature-icon bg-purple"
-              style="background: rgba(16, 185, 129, 0.1); color: #10b981"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-              </svg>
-            </div>
-            <h3>Zero Data Exposure</h3>
-            <p>
-              Keep your sensitive data secure. We mathematically verify your
-              queries using only your Schema DDL — zero production data
-              required.
-            </p>
-          </div>
-          <div class="feature-card glass-panel">
-            <div
-              class="feature-icon bg-blue"
-              style="background: rgba(14, 165, 233, 0.1); color: #0ea5e9"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
-                <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
-                <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
-              </svg>
-            </div>
-            <h3>Multi-Dialect Support</h3>
-            <p>
-              Write queries in your own dialect — Postgres, MySQL, SQLite, or
-              generic SQL — and Skolem parses them natively.
-            </p>
-          </div>
+        <div class="sk-cta-action">
+          {% if user_email %}
+          <a href="/verify" class="btn btn-primary btn-large btn-glow">Run your first proof</a>
+          {% else %}
+          <a href="/auth/login" class="btn btn-primary btn-large btn-glow">Run your first proof</a>
+          {% endif %}
+          <span class="sk-cta-note">bound 1–{{ max_bound }} · {{ free_tier_limit }} runs/month free</span>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <!-- How It Works Section -->
-      <section id="how-it-works" class="how-it-works">
-        <div class="section-header">
-          <h2>How it works</h2>
-          <p>Three steps, no production data, and an answer you can act on.</p>
+    <!-- Footer -->
+    <footer class="sk-footer">
+      <div class="sk-footer-grid">
+        <div class="sk-footer-brand">
+          <div class="sk-brand">
+            <span class="sk-brand-mark sk-brand-mark-plain">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+            </span>
+            Skolem
+          </div>
+          <span class="sk-footer-tag">
+            Formal verification for AI-generated SQL.<br />Built on the Z3 Theorem Prover.
+          </span>
         </div>
-        <div class="steps-grid">
-          <div class="step-card glass-panel">
-            <div class="step-number">1</div>
-            <h3>Give it your schema</h3>
-            <p>
-              Paste your Flyway DDL, or point the CLI at your
-              <code>migrations/</code> directory. Skolem folds every
-              <code>CREATE TABLE</code> and <code>ALTER TABLE</code> into a
-              model of your real schema — primary keys, foreign keys, and
-              <code>NOT NULL</code> included. Your data never leaves your
-              database; the schema is all it needs.
-            </p>
-          </div>
-          <div class="step-card glass-panel">
-            <div class="step-number">2</div>
-            <h3>Both queries become math</h3>
-            <p>
-              Each query is compiled into a logical formula under bag semantics
-              and three-valued NULL logic — the same rules your database
-              actually follows. The Z3 theorem prover then hunts for any
-              database at all, within the row bound, on which the two queries
-              disagree.
-            </p>
-          </div>
-          <div class="step-card glass-panel">
-            <div class="step-number">3</div>
-            <h3>Proof, or a counterexample</h3>
-            <p>
-              If no such database exists, the queries are equivalent — proven,
-              not merely untested. If one does, you get the exact tables and
-              rows, with both queries replayed on them so you can see precisely
-              where they diverge and why.
-            </p>
-          </div>
+        <div class="sk-footer-col">
+          <span class="sk-footer-h">product</span>
+          <a href="/verify">workspace</a>
+          <a href="#api">api</a>
+          <a href="/pricing">pricing</a>
         </div>
-      </section>
+        <div class="sk-footer-col">
+          <span class="sk-footer-h">docs</span>
+          <a href="/docs">api reference</a>
+          <a href="#coverage">coverage</a>
+          <a href="/integrations">cli &amp; mcp</a>
+        </div>
+        <div class="sk-footer-col">
+          <span class="sk-footer-h">legal</span>
+          <a href="/terms">terms</a>
+          <a href="/privacy">privacy</a>
+          <a href="https://github.com/NguyenTienDat377/SQLVerify" rel="noopener">github</a>
+        </div>
+      </div>
+      <div class="sk-footer-bottom">
+        <span>© 2026 Skolem</span>
+        <span>unsat is the good outcome</span>
+      </div>
+    </footer>
 
-      <!-- CTA Section -->
-      <section class="cta-section glass-panel">
-        <h2>Ready to secure your AI queries?</h2>
-        <p>
-          Integrate Skolem into your workflow today and stop semantic bugs
-          from reaching production.
-        </p>
-        {% if user_email %}
-        <a href="/verify" class="btn btn-primary btn-large btn-glow"
-          >Go to Dashboard</a
-        >
-        {% else %}
-        <a href="/auth/login" class="btn btn-primary btn-large btn-glow"
-          >Start Your First Verification</a
-        >
-        {% endif %}
-      </section>
+    <script nonce="{{ request.state.csp_nonce }}">
+      // Proof-console animation. Ported from the mockup's DCLogic class; the
+      // trace text mirrors the real pipeline stage for stage (including the
+      // SQLite witness cross-check, which is what stops a Z3 model with no
+      // real divergence from ever being shown as a counterexample).
+      // Console tabs — session.skolem / schema.ddl. Real <button role="tab">
+      // elements rather than styled divs, so the pair is keyboard-reachable and
+      // announced as tabs; aria-selected is kept in step with the visual state.
+      (function () {
+        var tabs = document.querySelectorAll(".sk-tab[data-sk-view]");
+        if (!tabs.length) return;
 
-      <!-- Footer -->
-      <footer class="landing-footer">
-        <div class="footer-content">
-          <div class="footer-logo">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            </svg>
-            <span>Skolem</span>
-          </div>
-          <div class="footer-links">
-            <span>© 2026 Skolem. Built for the modern data stack.</span>
-          </div>
-        </div>
-      </footer>
-    </div>
+        Array.prototype.forEach.call(tabs, function (tab) {
+          tab.addEventListener("click", function () {
+            var target = tab.getAttribute("data-sk-view");
+            Array.prototype.forEach.call(tabs, function (t) {
+              var on = t === tab;
+              t.classList.toggle("is-active", on);
+              t.setAttribute("aria-selected", on ? "true" : "false");
+              var panel = document.getElementById(t.getAttribute("aria-controls"));
+              if (panel) panel.hidden = !on;
+            });
+            void target;
+          });
+        });
+      })();
+
+      (function () {
+        var btn = document.getElementById("sk-run-proof");
+        var out = document.getElementById("sk-trace");
+        var verdict = document.getElementById("sk-verdict");
+        if (!btn || !out || !verdict) return;
+
+        var BOUND = {{ default_bound }};
+        var LINES = [
+          ["parsing original.sql, rewrite.sql, schema.ddl", "muted"],
+          ["normalizing to relational algebra (bag semantics)", "muted"],
+          ["encoding schema constraints: 2 tables, 1 fk, 3-valued logic", "muted"],
+          ["asserting output_a != output_b, bound=" + BOUND + " rows/table", "blue"],
+          ["z3: check-sat", "blue"],
+          ["sat — model extracted (users:2, orders:1)", "bad"],
+          ["replaying both queries on the witness (sqlite) — outputs differ", "bad"]
+        ];
+
+        var timer = null;
+        var running = false;
+        var done = false;
+
+        btn.addEventListener("click", function () {
+          if (running) return;
+          running = true;
+          done = false;
+          btn.textContent = "solving…";
+          out.innerHTML = "";
+          verdict.hidden = true;
+
+          var i = 0;
+          clearInterval(timer);
+          timer = setInterval(function () {
+            var line = document.createElement("div");
+            line.className = "sk-trace-line";
+
+            var n = document.createElement("span");
+            n.className = "sk-trace-n";
+            n.textContent = String(i + 1).padStart(2, "0");
+
+            var text = document.createElement("span");
+            text.className = "sk-trace-t sk-trace-" + LINES[i][1];
+            text.textContent = LINES[i][0];
+
+            line.appendChild(n);
+            line.appendChild(text);
+            out.appendChild(line);
+
+            i++;
+            if (i >= LINES.length) {
+              clearInterval(timer);
+              running = false;
+              done = true;
+              btn.textContent = "Run again";
+              verdict.hidden = false;
+            }
+          }, 320);
+        });
+      })();
+    </script>
     <script nonce="{{ request.state.csp_nonce }}">
       (function () {
         var params = Object.fromEntries(

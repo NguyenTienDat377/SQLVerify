@@ -5,52 +5,310 @@
 {% block description %}Bring Skolem's formal SQL verification into your terminal, CI/CD pipeline, or AI coding agent — CLI for GitHub Actions and GitLab CI, MCP server for Claude Code, Claude Desktop, and Cursor.{% endblock %}
 
 {% block content %}
-<div class="panel" style="max-width: 800px; margin: 2rem auto; padding: 2rem;">
-  <div style="margin-bottom: 2rem;">
-    <h1 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Developer Integrations</h1>
-    <p style="color: var(--text-secondary);">Bring Skolem directly into your terminal, CI/CD pipeline, or IDE.</p>
-  </div>
 
-  <div style="margin-bottom: 3rem;">
-    <h2 style="font-size: 1.25rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
-      Command Line Interface (CLI)
-    </h2>
-    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-      Verify migrations and AI-generated queries from your terminal or automate them in GitHub Actions and GitLab CI.
-    </p>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; margin-bottom: 1rem;">
-      git clone https://github.com/NguyenTienDat377/Skolem && cd Skolem<br>
-      pipx install ./cli<br><br>
-      export SKOLEM_API_KEY=skm_your_key_here<br>
-      skolem verify --ddl schema.sql --v1 original.sql --v2 generated.sql
+<!-- Public CI/CD + integrations page. Shell ported from CI.dc.html; its content
+     was replaced wholesale because that mockup documented an unbuilt product.
+     Every command, flag and exit code below is checked against cli/. You can
+     gate a PR today with a plain workflow step running the CLI — the packaged
+     Action is what's missing, not the capability.
+     See CLAUDE.md § integrations.html before editing. -->
+
+<div class="sk-page">
+
+  <!-- Status strip -->
+  <div class="sk-strip">
+    <div class="sk-strip-group">
+      <span class="sk-strip-live"><span class="sk-dot"></span>solver online</span>
+      <span>no database credentials in CI</span>
+      <span>DDL + SQL text only</span>
     </div>
-    <a href="/keys" class="btn btn-secondary btn-small">Get your API Key</a>
+    <div class="sk-strip-group sk-strip-right">
+      <span>exit 0 = gate passed · 1 = gate failed · 2 = the CLI failed</span>
+    </div>
   </div>
 
-  <div>
-    <h2 style="font-size: 1.25rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
-      Model Context Protocol (MCP) Server
-    </h2>
-    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-      Let Claude Desktop, Cursor, or your favorite AI IDE verify queries automatically during code generation.
+  <header class="sk-pr-head">
+    <div class="sk-kicker">CI/CD integration</div>
+    <h1 class="sk-h1 sk-pr-h1">Make the proof a required check.</h1>
+    <p class="sk-lede">
+      Run Skolem on every pull request that touches SQL. If a rewrite diverges
+      from the query it replaces, the step exits non-zero and the counterexample
+      database is printed in the job log — before review, not after deploy.
     </p>
-    <p style="font-weight: 600; margin-bottom: 0.5rem; font-size: 0.9rem;">Claude Desktop Configuration (claude_desktop_config.json):</p>
-    <div style="background: var(--bg-color); border: 1px solid var(--panel-border); padding: 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.875rem; overflow-x: auto; white-space: pre;">
-{
-  "mcpServers": {
-    "skolem": {
-      "command": "/abs/path/to/Skolem/mcp/.venv/bin/python",
-      "args": ["/abs/path/to/Skolem/mcp/skolem_mcp.py"],
-      "env": {
-        "SKOLEM_API_KEY": "skm_your_key_here",
-        "SKOLEM_URL": "https://skolem.dev"
+    <div class="sk-hero-buttons">
+      <a href="/keys" class="btn btn-primary btn-glow">Get an API key</a>
+      <a href="/docs#cli" class="btn btn-secondary">CLI reference</a>
+    </div>
+  </header>
+
+  <!-- Three steps -->
+  <section class="sk-section">
+    <div class="sk-steps-grid">
+      <div class="sk-step-card">
+        <div class="sk-step-n-lbl sk-blue">01 · install</div>
+        <div class="sk-step-title">Add the CLI to your runner</div>
+        <p>
+          A thin Python client over the API — <code class="sk-inline-code">httpx</code>
+          is its only dependency. The solver runs server-side, so the runner stays light.
+        </p>
+      </div>
+      <div class="sk-step-card">
+        <div class="sk-step-n-lbl sk-purple">02 · authenticate</div>
+        <div class="sk-step-title">Set SKOLEM_API_KEY</div>
+        <p>
+          Mint a key on the <a href="/keys">API Keys</a> page and store it as a
+          CI secret. The same variable works for the CLI and the MCP server.
+        </p>
+      </div>
+      <div class="sk-step-card">
+        <div class="sk-step-n-lbl sk-green">03 · require</div>
+        <div class="sk-step-title">Protect the branch</div>
+        <p>
+          Mark the job as a required check and SQL that diverges from the query
+          it replaces can no longer merge.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Config -->
+  <section class="sk-section">
+    <div class="sk-section-head">
+      <h2 class="sk-h2">Wiring</h2>
+      <span class="sk-comment">// whichever runner you use</span>
+    </div>
+
+    <div class="sk-code-card">
+      <div class="sk-runner-tabs" role="tablist" aria-label="CI runner">
+        <button type="button" class="sk-tab is-active" role="tab" aria-selected="true"
+                aria-controls="runner-github" data-runner="github">github actions</button>
+        <button type="button" class="sk-tab" role="tab" aria-selected="false"
+                aria-controls="runner-gitlab" data-runner="gitlab">gitlab ci</button>
+        <button type="button" class="sk-tab" role="tab" aria-selected="false"
+                aria-controls="runner-cli" data-runner="cli">bare cli</button>
+      </div>
+
+      <div id="runner-github" class="sk-runner-panel" role="tabpanel">
+<pre class="sk-code"><span class="c"># .github/workflows/sql-proof.yml</span>
+<span class="k">name</span>: sql-proof
+<span class="k">on</span>: [pull_request]
+
+<span class="k">jobs</span>:
+  prove:
+    <span class="k">runs-on</span>: ubuntu-latest
+    <span class="k">steps</span>:
+      - <span class="k">uses</span>: actions/checkout@v4
+        <span class="k">with</span>:
+          <span class="k">fetch-depth</span>: 0   <span class="c"># diff needs the merge base</span>
+      - <span class="k">uses</span>: actions/setup-python@v5
+        <span class="k">with</span>:
+          <span class="k">python-version</span>: <span class="s">'3.12'</span>
+      - <span class="k">run</span>: pipx install ./cli
+      - <span class="k">run</span>: |
+          skolem diff \
+            --base origin/${{ '{{' }} github.base_ref {{ '}}' }} \
+            --ddl migrations/ <span class="s">'queries/*.sql'</span> \
+            --output github
+        <span class="k">env</span>:
+          <span class="k">SKOLEM_API_KEY</span>: ${{ '{{' }} secrets.SKOLEM_API_KEY {{ '}}' }}</pre>
+      </div>
+
+      <div id="runner-gitlab" class="sk-runner-panel" hidden role="tabpanel">
+<pre class="sk-code"><span class="c"># .gitlab-ci.yml</span>
+<span class="k">sql-proof</span>:
+  <span class="k">image</span>: python:3.12-slim
+  <span class="k">rules</span>:
+    - <span class="k">if</span>: $CI_MERGE_REQUEST_IID
+  <span class="k">variables</span>:
+    <span class="k">GIT_DEPTH</span>: <span class="s">"0"</span>   <span class="c"># diff needs the merge base</span>
+  <span class="k">script</span>:
+    - pip install pipx &amp;&amp; pipx install ./cli
+    - |
+      skolem diff \
+        --base origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME \
+        --ddl migrations/ <span class="s">'queries/*.sql'</span> \
+        --output json &gt; proof.ndjson
+  <span class="k">artifacts</span>:
+    <span class="k">paths</span>: [proof.ndjson]
+    <span class="k">when</span>: always</pre>
+      </div>
+
+      <div id="runner-cli" class="sk-runner-panel" hidden role="tabpanel">
+<pre class="sk-code"><span class="c"># any runner, any shell</span>
+pipx install ./cli
+<span class="k">export</span> SKOLEM_API_KEY=skm_your_key_here
+
+<span class="c"># one explicit pair</span>
+skolem verify --ddl schema.sql --v1 before.sql --v2 after.sql
+
+<span class="c"># or every query the branch changed</span>
+skolem diff --base origin/main --ddl migrations/ <span class="s">'queries/*.sql'</span>
+
+<span class="c"># stricter gate: treat unknown and error as failures too</span>
+skolem diff --base origin/main --ddl migrations/ <span class="s">'queries/*.sql'</span> \
+  --fail-on divergent,unknown,error</pre>
+      </div>
+    </div>
+
+    <p class="sk-legend-note">
+      <code class="sk-inline-code">skolem diff</code> derives the pairs from git:
+      each changed file is compared against its own content at
+      <code class="sk-inline-code">git merge-base --base HEAD</code>, so the same
+      command gives the same answer locally on a dirty tree and in CI after
+      checkout. That's why the checkout needs full history — with a shallow
+      clone there is no merge base to diff against. A packaged GitHub Action is
+      on the roadmap; until then this workflow step is the supported path.
+    </p>
+  </section>
+
+  <!-- Exit codes -->
+  <section class="sk-section">
+    <div class="sk-doc-2col">
+      <div>
+        <h2 class="sk-h2">Exit codes</h2>
+        <p class="sk-body">
+          Gate on the exit code, or parse the JSON on stdout. The split that
+          matters is <strong>verdict versus infrastructure</strong>.
+        </p>
+        <div class="sk-doc-tablewrap sk-boxed-table">
+          <table class="sk-doc-table">
+            <tbody>
+              <tr>
+                <td class="sk-mono sk-exit-ok">0</td>
+                <td class="sk-muted">gate passed — every pair satisfied <code class="sk-inline-code">--fail-on</code></td>
+              </tr>
+              <tr>
+                <td class="sk-mono sk-exit-bad">1</td>
+                <td class="sk-muted">gate failed — a verdict matched <code class="sk-inline-code">--fail-on</code> (by default, <code class="sk-inline-code">divergent</code>)</td>
+              </tr>
+              <tr>
+                <td class="sk-mono sk-exit-warn">2</td>
+                <td class="sk-muted">the CLI itself failed — bad flags, unreadable file, network, 401, 402, 429</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="sk-doc-note">
+          A lapsed key or a network blip exits <strong>2</strong>, never 1. A gate
+          that reports a broken pipeline as a broken query is a gate people learn
+          to ignore. Across many files the worst code wins: 2 beats 1 beats 0.
+        </p>
+      </div>
+
+      <div>
+        <h2 class="sk-h2">Choosing a policy</h2>
+        <p class="sk-body">
+          <code class="sk-inline-code">--fail-on</code> defaults to
+          <code class="sk-inline-code">divergent</code> alone.
+          <code class="sk-inline-code">unknown</code> and
+          <code class="sk-inline-code">error</code> warn loudly and pass.
+        </p>
+        <div class="sk-idle-tip">
+          <div class="sk-idle-tip-h">Why not fail closed here?</div>
+          <p>
+            Fail-closed is right for the <em>verifier</em> — a wrong verdict is
+            fatal, so unsupported SQL is rejected outright. It's wrong for the
+            <em>gate</em>: a check that reddens the first time someone writes a
+            CTE gets uninstalled by the end of the week. An
+            <code class="sk-inline-code">unknown</code> always prints "not a proof
+            of equivalence", so it can never read as a pass. Strict teams opt in
+            with <code class="sk-inline-code">--fail-on divergent,unknown,error</code>.
+          </p>
+        </div>
+        <p class="sk-doc-note">
+          Every run counts against your monthly quota, including
+          <code class="sk-inline-code">unknown</code> and
+          <code class="sk-inline-code">error</code> — see <a href="/pricing">pricing</a>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- MCP -->
+  <section class="sk-section">
+    <div class="sk-section-head">
+      <h2 class="sk-h2">AI agents (MCP)</h2>
+      <span class="sk-comment">// verification in the generation loop</span>
+    </div>
+    <p class="sk-body sk-mcp-lede">
+      Expose verification as a tool to Claude Code, Claude Desktop, or Cursor.
+      The agent proposes a rewrite, gets back a proof or a concrete
+      counterexample, and revises against ground truth instead of guessing —
+      the counterexample-driven repair loop.
+    </p>
+
+    <div class="sk-doc-2col">
+      <div class="sk-code-card">
+        <div class="sk-code-head">claude_desktop_config.json</div>
+<pre class="sk-code">{
+  <span class="k">"mcpServers"</span>: {
+    <span class="k">"skolem"</span>: {
+      <span class="k">"command"</span>: <span class="s">"/abs/path/to/Skolem/mcp/.venv/bin/python"</span>,
+      <span class="k">"args"</span>: [<span class="s">"/abs/path/to/Skolem/mcp/skolem_mcp.py"</span>],
+      <span class="k">"env"</span>: {
+        <span class="k">"SKOLEM_API_KEY"</span>: <span class="s">"skm_your_key_here"</span>,
+        <span class="k">"SKOLEM_URL"</span>: <span class="s">"{{ site_url }}"</span>
       }
     }
   }
-}
+}</pre>
+      </div>
+      <div class="sk-code-card">
+        <div class="sk-code-head">install</div>
+<pre class="sk-code"><span class="c"># the MCP server is standalone — its own venv,</span>
+<span class="c"># and it never imports the solver</span>
+<span class="k">cd</span> mcp
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+<span class="c"># same env vars as the CLI, one setup for both</span>
+<span class="k">export</span> SKOLEM_API_KEY=skm_your_key_here
+<span class="k">export</span> SKOLEM_URL={{ site_url }}</pre>
+      </div>
     </div>
-  </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="sk-section sk-section-last">
+    <div class="sk-cta">
+      <div class="sk-cta-copy">
+        <h2 class="sk-h2 sk-cta-h">Wire it into one repo tonight.</h2>
+        <p class="sk-body">
+          Install the CLI, add a secret, make the job required. Free while you
+          evaluate.
+        </p>
+      </div>
+      <div class="sk-cta-action">
+        {% if user_email %}
+        <a href="/keys" class="btn btn-primary btn-large btn-glow">Create an API key</a>
+        {% else %}
+        <a href="/auth/login" class="btn btn-primary btn-large btn-glow">Get started free</a>
+        {% endif %}
+        <span class="sk-cta-note">no database credentials ever leave your infrastructure</span>
+      </div>
+    </div>
+  </section>
 </div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+  // Runner tabs. Real buttons with aria-selected kept in sync, rather than the
+  // mockup's styled divs — this is a public page and the tab strip is the only
+  // way to reach two thirds of the content.
+  (function () {
+    var tabs = document.querySelectorAll(".sk-runner-tabs .sk-tab");
+    if (!tabs.length) return;
+
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        tabs.forEach(function (t) {
+          var panel = document.getElementById(t.getAttribute("aria-controls"));
+          var on = t === tab;
+          t.classList.toggle("is-active", on);
+          t.setAttribute("aria-selected", on ? "true" : "false");
+          if (panel) panel.hidden = !on;
+        });
+      });
+    });
+  })();
+</script>
 {% endblock %}

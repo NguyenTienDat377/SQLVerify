@@ -1,0 +1,48 @@
+/* Skolem — Font faces (self-hosted)
+ *
+ * Repo-local: this file does NOT come from the Claude Design system verbatim.
+ * The design system declares five static Inter faces (400/500/600/700/800,
+ * ~700 KB and five requests). We ship the single **variable** face instead —
+ * 344 KB in one request, and it covers every weight in the 100–900 range
+ * including the 800 the landing hero uses. If the design system is re-ported,
+ * re-port tokens/colors|typography|spacing|effects.css but keep this file.
+ *
+ * Files live in web/static/fonts/ with their OFL licence texts alongside;
+ * both families are SIL Open Font Licence 1.1 and require that notice to ship.
+ *   · InterVariable.woff2          — rsms/inter v4.1
+ *   · JetBrainsMono-{Regular,Medium}.woff2 — JetBrains/JetBrainsMono v2.304
+ *
+ * Not subsetted: fontTools isn't installed, and guessing at a unicode-range
+ * risks tofu for any user whose data contains characters we pruned. 528 KB
+ * total, cached after first paint.
+ *
+ * font-display: swap — text paints immediately in the fallback stack and
+ * re-renders when the face lands. On a page whose whole value proposition is
+ * showing you a counterexample, invisible text is the worse failure.
+ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  /* One variable face answering the whole range. A static @font-face per weight
+     would need five separate files and five requests to say the same thing. */
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/static/fonts/InterVariable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/static/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/static/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+}

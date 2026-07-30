@@ -10,14 +10,32 @@
     <div>
         <span class="status-badge status-unknown">Timeout</span>
         <div class="result-reason">The solver timed out before finding a result.</div>
-        <p style="font-size: 0.875rem; color: var(--text-secondary);">Try reducing rows per table or increasing the timeout.</p>
+        <p style="font-size: 0.875rem; color: var(--text-secondary);">
+            This is <strong>not</strong> a pass — the queries may or may not be equivalent.
+            Lower the row bound or raise the timeout under <em>Advanced settings</em> and run again.
+        </p>
     </div>
 
     {% elif result.status == 'equivalent' %}
     <div>
         <span class="status-badge status-equivalent">Equivalent</span>
-        <div class="result-reason">The queries are logically equivalent under the given schema and bounds.</div>
-        <p style="font-size: 0.875rem; color: var(--text-secondary);">No counterexample was found. The rewrite is safe to deploy.</p>
+        {#
+          State the bound the verdict is scoped to whenever the caller knows it
+          (a live run). A replayed history entry does not carry it, so that path
+          keeps the generic wording rather than printing a bound that may not be
+          the one the run used.
+        #}
+        <div class="result-reason">
+            {% if bound %}
+            Proven equivalent for <strong>every</strong> database of up to {{ bound }} row{{ '' if bound == 1 else 's' }} per table.
+            {% else %}
+            The queries are logically equivalent under the given schema and bounds.
+            {% endif %}
+        </div>
+        <p style="font-size: 0.875rem; color: var(--text-secondary);">
+            No counterexample exists within that bound — not “none was found by sampling”.
+            The rewrite is safe to deploy.
+        </p>
     </div>
 
     {% elif result.status == 'divergent' %}
@@ -205,6 +223,55 @@
         </div>
 
     </div>
+    {% endif %}
+    {% if inputs and (inputs.ddl_sql or inputs.sql_v1 or inputs.sql_v2) %}
+    <details class="sk-inputs-accordion">
+        <summary class="sk-inputs-summary">
+            <span class="sk-inputs-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="advanced-chevron"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                Inspected Queries
+            </span>
+            {% if inputs.dialect %}
+            <span class="sk-badge sk-badge--muted">{{ inputs.dialect }}</span>
+            {% endif %}
+            <button type="button"
+                    class="btn btn-secondary btn-sm sk-load-inputs-btn"
+                    data-ddl="{{ inputs.ddl_sql or '' }}"
+                    data-v1="{{ inputs.sql_v1 or '' }}"
+                    data-v2="{{ inputs.sql_v2 or '' }}">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px;"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+                Load into Editor
+            </button>
+        </summary>
+        <div class="sk-inputs-body">
+            {% if inputs.ddl_sql %}
+            <div class="sk-input-block">
+                <div class="sk-input-label">
+                    <span class="sk-file-dot sk-dot-schema"></span> schema.ddl
+                </div>
+                <pre class="sk-code-block"><code>{{ inputs.ddl_sql }}</code></pre>
+            </div>
+            {% endif %}
+
+            {% if inputs.sql_v1 %}
+            <div class="sk-input-block">
+                <div class="sk-input-label">
+                    <span class="sk-file-dot sk-dot-v1"></span> original.sql
+                </div>
+                <pre class="sk-code-block"><code>{{ inputs.sql_v1 }}</code></pre>
+            </div>
+            {% endif %}
+
+            {% if inputs.sql_v2 %}
+            <div class="sk-input-block">
+                <div class="sk-input-label">
+                    <span class="sk-file-dot sk-dot-v2"></span> rewrite.sql
+                </div>
+                <pre class="sk-code-block"><code>{{ inputs.sql_v2 }}</code></pre>
+            </div>
+            {% endif %}
+        </div>
+    </details>
     {% endif %}
 
 </div>

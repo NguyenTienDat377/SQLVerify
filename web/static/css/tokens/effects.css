@@ -1,0 +1,42 @@
+/* Skolem — Elevation, glow, blur, motion tokens
+ *
+ * Ported verbatim from the "SQLVerify Design System" Claude Design project
+ * (tokens/effects.css).
+ */
+:root {
+  /* Shadows */
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.3);       /* glass panel hover */
+  --shadow-pricing: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+  --shadow-hero: 0 20px 40px rgba(0, 0, 0, 0.5);        /* hero image frame */
+  --shadow-input-focus: 0 0 0 3px rgba(59, 130, 246, 0.2), 0 4px 12px rgba(0, 0, 0, 0.2);
+  --shadow-toggle: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+  /* Glow — the blue neon accent used on primary CTAs and the logo */
+  --glow-blue: 0 0 15px rgba(59, 130, 246, 0.4);
+  --glow-blue-strong: 0 0 25px rgba(59, 130, 246, 0.6);
+  --glow-logo: drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+
+  /* Glass */
+  --glass-bg: rgba(24, 24, 27, 0.6);
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --glass-border-hover: rgba(255, 255, 255, 0.1);
+  --glass-blur: blur(12px);
+
+  /* Ambient marketing backdrop — dual radial blue/purple bloom */
+  --bg-bloom:
+    radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.08) 0%, transparent 40%),
+    radial-gradient(circle at 85% 30%, rgba(168, 85, 247, 0.08) 0%, transparent 40%);
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 0.15s;
+  --dur-med: 0.2s;
+  --dur-slow: 0.3s;
+  --dur-slower: 0.5s;
+}
+
+/* Result entrance — used when a verdict panel swaps in */
+@keyframes sv-fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

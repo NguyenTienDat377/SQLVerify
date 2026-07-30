@@ -1,14 +1,23 @@
 {% extends "base.html" %}
+{% block title %}API Keys — Skolem{% endblock %}
 {% block content %}
-<div class="keys-page" style="max-width: 720px; margin: 0 auto;">
-    <h1>API Keys</h1>
-    <p style="color: var(--text-secondary);">
-        Call <code>POST /api/verify/text</code> from CI with
-        <code>Authorization: Bearer skm_…</code>. A key is shown only once, at
-        creation — store it somewhere safe.
-    </p>
+<div class="sk-settings">
+    <div class="sk-settings-header">
+        <div class="sk-settings-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+            </svg>
+        </div>
+        <div>
+            <h1 class="sk-settings-title">API Keys</h1>
+            <p class="sk-settings-desc">
+                Call <code>POST /api/verify/text</code> from CI with
+                <code>Authorization: Bearer skm_…</code>. Keys are shown once at creation.
+            </p>
+        </div>
+    </div>
 
-    <form class="key-create-form inline-form"
+    <form class="sk-create-form"
           hx-post="/api/keys"
           hx-target="#api-keys-panel"
           hx-swap="innerHTML">

@@ -20,8 +20,15 @@
             <li>> PK: {{ table.primary_key_columns | join(', ') }}</li>
             {% endif %}
             
+            {#
+              references_columns is empty for an inline `REFERENCES t(c)` —
+              _extract_foreign_keys in core/ddl_parser.py doesn't pick the column
+              out of that sqlglot shape. Printing it unconditionally rendered an
+              empty "users()". The encoder falls back to the referenced table's
+              PK in that case, so omit the parens rather than invent a column.
+            #}
             {% for fk in table.foreign_keys %}
-            <li>> FK: {{ fk.columns | join(', ') }} -> {{ fk.references_table }}({{ fk.references_columns | join(', ') }})</li>
+            <li>> FK: {{ fk.columns | join(', ') }} -> {{ fk.references_table }}{% if fk.references_columns %}({{ fk.references_columns | join(', ') }}){% endif %}</li>
             {% endfor %}
             
             {% set not_nulls = [] %}

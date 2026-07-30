@@ -42,6 +42,10 @@ from core.analytics import (
 )
 from core.equivalence import check_equivalence
 from core.models import VerificationResult
+# The engine's own default, not a retyped literal: the UI's Advanced-settings
+# panel and the docs page both render it, so a change in the encoder must not
+# leave three copies disagreeing about what "default" means.
+from core.sql_encoder import DEFAULT_BOUND
 
 from explainer.explain import explain_result
 
@@ -225,7 +229,7 @@ async def verify_equivalence(
     query_v2_file: Optional[UploadFile] = File(None, description="AI-generated query (.sql)"),
     query_v2_text: Optional[str] = Form(None, description="Generated query text"),
     dialect:    str = Form(default="generic", description="SQL dialect"),
-    bound:      int = Form(default=3, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
+    bound:      int = Form(default=DEFAULT_BOUND, ge=1, le=MAX_BOUND, description="Z3 symbolic bound"),
     timeout_ms: int = Form(default=WEB_TIMEOUT_MS, ge=1_000, le=WEB_MAX_TIMEOUT_MS),
     explain:    Optional[str] = Form(default=None, description="Set to 'true' to request AI explanation"),
     project_id: Optional[str] = Form(default=None, description="Project to attach this run to"),
@@ -277,7 +281,17 @@ async def verify_equivalence(
         return templates.TemplateResponse(
             request=request,
             name="partials/result.html",
-            context={"result": result, "run_id": run_id}
+            context={
+                "result": result,
+                "run_id": run_id,
+                "bound": bound,
+                "inputs": {
+                    "ddl_sql": ddl_sql,
+                    "sql_v1": v1_sql,
+                    "sql_v2": v2_sql,
+                    "dialect": dialect,
+                },
+            },
         )
 
     return _result_to_response(result)
@@ -335,7 +349,7 @@ class VerifyTextRequest(BaseModel):
     sql_v1:     str
     sql_v2:     str
     dialect:    str = "generic"
-    bound:      int = 3
+    bound:      int = DEFAULT_BOUND
     timeout_ms: int = CICD_TIMEOUT_MS
     project_id: Optional[str] = None
 
@@ -441,7 +455,16 @@ async def history_detail(run_id: str, request: Request):
     return templates.TemplateResponse(
         request=request,
         name="partials/result.html",
-        context={"result": result, "run_id": run_id}
+        context={
+            "result": result,
+            "run_id": run_id,
+            "inputs": {
+                "ddl_sql": row.get("ddl_sql"),
+                "sql_v1": row.get("sql_v1"),
+                "sql_v2": row.get("sql_v2"),
+                "dialect": row.get("dialect"),
+            },
+        },
     )
 
 # ---------------------------------------------------------------------------

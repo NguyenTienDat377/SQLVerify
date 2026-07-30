@@ -104,7 +104,29 @@ Skolem/
 └── web/
     ├── static/
     │   ├── css/
-    │   │   └── styles.css
+    │   │   ├── styles.css          # ✅ @imports tokens/, then styles components against them
+    │   │   └── tokens/             # ✅ DONE — colors / typography / spacing / effects,
+    │   │                           #   ported verbatim from the Claude Design "SQLVerify
+    │   │                           #   Design System" project. The token variable NAMES
+    │   │                           #   match what styles.css always used, so a re-port
+    │   │                           #   re-themes every template without touching a rule.
+    │   │                           #   Change a colour THERE and re-port; never inline a
+    │   │                           #   hex in styles.css. colors.css also carries a small
+    │   │                           #   repo-local block the DS never named: --danger-color/
+    │   │                           #   --danger-hover, plus --bg-deep (#0b0b0d console
+    │   │                           #   chrome) and --text-dim (#52565f comments/disabled)
+    │   │                           #   used across the marketing pages. styles.css now
+    │   │                           #   contains ZERO literal hex — keep it that way.
+    │   │                           #   tokens/fonts.css is repo-local (NOT from the DS):
+    │   │                           #   @font-face for the self-hosted faces below.
+    │   ├── fonts/                  # ✅ DONE — self-hosted, 528 KB total, OFL licences
+    │   │                           #   shipped alongside (required by the licence):
+    │   │                           #   InterVariable.woff2 (344 KB, rsms/inter v4.1 —
+    │   │                           #   ONE variable face covering 100–900, replacing the
+    │   │                           #   DS's five static faces), JetBrainsMono-Regular /
+    │   │                           #   -Medium.woff2 (JetBrains/JetBrainsMono v2.304).
+    │   │                           #   Not subsetted — fontTools isn't installed, and a
+    │   │                           #   guessed unicode-range risks tofu in user data.
     │   └── img/
     │       ├── favicon.png         # ✅ DONE — real PNG (linked from base.html/landing.html)
     │       ├── hero.png            # ✅ DONE — landing hero image
@@ -112,8 +134,12 @@ Skolem/
     └── templates/
         ├── base.html               # ✅ DONE — app shell + topbar (Projects / API Keys / Billing / Sign out) + Terms/Privacy footer ({% block title %})
         ├── landing.html            # ✅ DONE — marketing page + GitHub + magic-link sign-in
-        ├── verify.html             # ✅ DONE — project selector + SQL Input tab + History tab (HTMX wired)
-        ├── pricing.html            # ✅ DONE — plans; CTAs → /billing/checkout
+        ├── verify.html             # ✅ DONE — 3-column workspace: sidebar (project + input nav +
+        │                           #   recent proofs) | editor (3 panes, file-or-paste, gutters)
+        │                           #   | results (+ status bar). HTMX contracts unchanged.
+        │                           #   + Advanced settings (bound / timeout, with explanations)
+        ├── pricing.html            # ✅ DONE — plans + limits matrix + sizing calculator + FAQ;
+        │                           #   CTAs → /billing/checkout; limits injected by pricing_page()
         ├── docs.html               # ✅ DONE — public API docs (/docs); field tables introspected from the Pydantic models
         ├── integrations.html       # ✅ DONE — public CLI + MCP setup page (/integrations)
         ├── keys.html               # ✅ DONE — per-user API key management
@@ -230,17 +256,25 @@ Skolem/
   (Migrations #1–#4 below; the service key intentionally bypasses RLS for server writes)
 
 ### web/
-- `landing.html` — marketing page; GitHub sign-in + magic-link email form (HTMX)
-- `verify.html` — project selector (`#project-select`) + two-tab layout: SQL Input (form) + History (HTMX-loaded). `switchTab()` JS handles tabs; the form and History tab `hx-include` the selector so a run is tagged with the chosen project and History filters by it.
-- `pricing.html` — plan cards; CTAs point at `/billing/checkout?plan=…`
-- `docs.html` — **public API documentation** at `GET /docs` (in the `JWTMiddleware` allowlist + sitemap). The request/response field tables are **introspected from the live `VerifyTextRequest`/`VerifyResponse` Pydantic models** (`_describe_model` in `main.py`), so a renamed or added field updates the docs on the next request instead of rotting; only the prose descriptions (`_REQUEST_FIELD_DOCS`/`_RESPONSE_FIELD_DOCS`) are hand-written, and a field with no entry renders an empty cell as a visible nudge. Limits (`MAX_BOUND`, `MAX_TIMEOUT_MS`, …) are imported from `api/verify.py`, never retyped. The Swagger console lives at `/api-docs` so `/docs` stays free for this page.
-- `integrations.html` — public marketing page for the CLI + MCP surfaces (real install commands mirroring `cli/README.md` and `mcp/README.md`); served by `GET /integrations` in `main.py`, in the `JWTMiddleware` public allowlist and the sitemap
+- `landing.html` — marketing page, ported from the **"Skolem landing page redesign"** Claude Design project (projectId `72110d11-8e3d-47be-aa21-6ccaafc4108b`; read it with the `DesignSync` tool — note `list_projects` does NOT return it, since that lists only design-*system* projects). Terminal status strip → sticky mono nav → split hero (headline + `pipx install` + GitHub sign-in + magic-link) beside a **proof console** (tabbed `session.skolem` / `schema.ddl`, with a nonce'd JS "Run proof" that streams the real pipeline stages to a `DIVERGENT` badge) → "Anatomy of a proof" → counterexample tables → **coverage matrix** → API panel → CTA → footer. **Every capability claim on this page is checked against the engine and must stay that way** — the mockup advertised `DISTINCT`/`UNION`/`LIMIT`/`MIN`/`MAX` as supported (all raise `ValueError`), a `/v1/verify` endpoint with a `{verdict, solver, elapsed_ms, witness, diff}` response, `z3 4.13.0`, `bound 1–8`, a Homebrew tap, and a p50 latency figure; the port replaced all of them with what the code does. The third coverage column is **"rejected"**, not "planned" — fail-closed is the product, so it reads as a feature. Solver version and limits are injected by `root()` in `main.py` (`z3.get_version_string()`, `DEFAULT_BOUND`, `MAX_BOUND`, `FREE_TIER_MONTHLY_LIMIT`) rather than typed into the markup, so they cannot drift.
+- `verify.html` — **three-column workspace**, ported from the redesign project's `Workspace.dc.html`: sidebar (`#project-select` + jump-to-pane nav + always-on "recent proofs") | editor (three `schema.ddl`/`original.sql`/`rewrite.sql` panes, each file-or-paste, plus dialect + Advanced + Run pinned to the column floor) | results (`#result-panel` + a status bar). Columns scroll independently. The old SQL-Input/History tabs and `switchTab()` are gone — history is always visible in the sidebar and reloads on `load`, on project change, and on a `refreshHistory` event fired after each run. Every HTMX contract is unchanged: the form still `hx-post`s multipart to `/api/verify` targeting `#result-panel` and `hx-include`s the selector, so runs stay project-tagged.
+  - **Editors are plain `<textarea>`s with a line-number gutter sibling** — no CodeMirror, no CDN script, no CSP change. The gutter mirrors line count and scroll offset and is `aria-hidden` (the numbers are decoration; announcing "1 2 3 4" ahead of the code is worse than silence). File-vs-paste toggling swaps an `.is-hidden` class rather than writing `style.display`, so CSS keeps ownership of layout — an inline `display: block` would flatten the editor's flex row and detach the gutter.
+  - **Deliberately NOT ported** (no data behind them): the `trace` and `smt2` tabs (no stage timings are emitted; `Solver.sexpr()` is never called), the pair hash / assertion count / `elapsed_ms`, the `412 / 500 proofs` quota chip, "cached pairs are free" (there is no result cache), "Attach proof to PR" / "Queue background proof" (unbuilt), and the eq/div/unk/err **outcome picker**, which is a mockup preview device. Also rejected: the mockup's bare ± bound stepper — see the decision table; the bound ships with its explanation or not at all.
+  - **Fixed in passing:** `#schema-summary-panel` used to live *inside* `#result-panel`, so the first verification swapped it away and every later schema edit had no target left — the panel silently stopped updating. It now sits beside the schema pane, which is also where it belongs.
+  - **Advanced settings** — a collapsed `<details>` panel inside the form exposing `bound` (1…`MAX_BOUND`) and `timeout_ms`, each with the prose that makes the number meaningful. Options are generated from server-supplied limits (`default_bound`/`max_bound`/`default_timeout_ms`/`max_timeout_ms`, passed by `verify_page()` in `main.py`), so the form can never offer a value the endpoint would 422 on. The collapsed summary shows the live `bound N · Ts` and highlights when either is non-default (a hidden non-default bound would silently change the strength of a proof); a warning appears for a raised bound left on the default timeout. `partials/result.html` echoes the bound on an `equivalent` verdict when the caller supplies it — the live run does, history replay does not (the stored run has no bound column, and a guessed one would misstate the proof).
+- `pricing.html` — ported from the same redesign project's `Pricing.dc.html`. Header → three plan cards → **limits matrix** → sizing calculator → FAQ → CTA; CTAs point at `/billing/checkout?plan=…`. **The same no-overclaiming rule as `landing.html` applies, and it bites harder here — a wrong number on a pricing page is a billing dispute.** The mockup gated `bound`, solver timeout, history retention and API-token count by tier; the engine gates **none** of those (`_enforce_quota` only lifts the monthly run cap for a paid tier), so the matrix says "same on every plan" and the page turns that into the pitch: *a cheaper plan never buys you a weaker proof*. Also dropped as unbacked: the monthly/annual toggle (there is no annual Lemon Squeezy variant, so its price had no checkout behind it), "UNKNOWN results are not billed" (`count_runs_this_month` counts every row), "re-running an unchanged pair is cached and free" (no result cache — see the scaling roadmap), free-Team-for-OSS, SSO, shared projects and priority queue. Team's GitHub Action is marked **in development**, not sold. Every number (`free_tier_limit`, `max_bound`, both timeout pairs) is injected by `pricing_page()` in `main.py` from `api/verify.py`'s constants — `FREE_TIER_MONTHLY_LIMIT` is env-tunable, so a hardcoded "100" would start lying the first time it changes on Render. **Known gap:** nothing in the code distinguishes Individual from Team — both are just `PAID_TIERS` — so their difference on the page is support and roadmap only. Implement per-tier metering before claiming more.
+- **Superseded CSS** — `.pricing-grid`/`.pricing-card`/`.pricing-tier`/`.pricing-price`/`.pricing-period`/`.pricing-features`/`.pricing-feature`/`.popular-badge`, the whole `.landing-*`/`.hero`/`.features` block, and now `.panel`/`.panel-left`/`.panel-right`/`.tabs` (the old two-panel workspace) are all dead and can be deleted. **Do not delete `.pricing-header`/`.pricing-title`/`.pricing-subtitle`** — `404.html` and `500.html` reuse them.
+- **Class-name collisions are a real hazard** in this single stylesheet: the workspace's submit button was first called `.sk-run-btn`, which the landing page's proof-console button already owned, and the landing's small outlined style silently flattened the primary CTA. It is `.sk-ws-run` now. Grep before naming a new `sk-` class.
+- `docs.html` — **public API documentation** at `GET /docs` (in the `JWTMiddleware` allowlist + sitemap). The request/response field tables are **introspected from the live `VerifyTextRequest`/`VerifyResponse` Pydantic models** (`_describe_model` in `main.py`), so a renamed or added field updates the docs on the next request instead of rotting; only the prose descriptions (`_REQUEST_FIELD_DOCS`/`_RESPONSE_FIELD_DOCS`) are hand-written, and a field with no entry renders an empty cell as a visible nudge. Limits (`MAX_BOUND`, `MAX_TIMEOUT_MS`, …) are imported from `api/verify.py`, never retyped. The Swagger console lives at `/api-docs` so `/docs` stays free for this page. **Shell ported from the redesign's `Docs.dc.html`** — sticky section rail + a **semantics reference** the page previously lacked: what sat/unsat/unknown actually mean, a coverage table, bag semantics, a three-valued-logic truth table, bounds & completeness, and the real CLI flags. The mockup's coverage list was wrong in both directions (it advertised `DISTINCT`, `UNION`/`UNION ALL`, `MIN`/`MAX`, `CASE`, `ORDER BY`+`LIMIT`, `EXISTS` and `LATERAL` as supported — all raise `ValueError`), and its "add `DISTINCT` and the encoder switches that projection to set semantics" claim was dropped for the same reason. Also dropped: invented per-bound timings (~60ms…~4s), an "engine 1.4.2" version, and flags that don't exist (`--emit-smt2`, `--format junit`, `skolem prove`). The CLI table mirrors `cli/skolem_cli.py`'s real argparse surface; `z3_version` and `default_bound` are injected by `docs_page()`.
+- `integrations.html` — public **CI/CD + CLI + MCP** page, served by `GET /integrations`, in the `JWTMiddleware` public allowlist and the sitemap. Shell ported from the redesign's `CI.dc.html`; its **content was replaced wholesale**, because that mockup documented a product that doesn't exist: a GitHub App and `skolem/prove-action@v1`, a `.skolem.yml` + `--config` flag, `skolem prove`, `npm i -g @skolem/cli` (it's Python — `pipx install ./cli`), `--format junit`/`--out`/`--emit-smt2`, a `skolem/cli:1` Docker image, "cached per (schema, pair) so unchanged SQL costs nothing" (no cache) and a "median CI proof 380ms". Most dangerous of all, it mapped **exit codes 0/1/2/3 onto statuses**, directly contradicting the real contract where `2` always means *the CLI itself failed* — the page now states 0/1/2 with that rationale, since getting this wrong is how a CI gate teaches people to ignore it.
+  - What replaced it is true today: three runner tabs (**GitHub Actions / GitLab CI / bare CLI**) that all shell out to the real `skolem verify` / `skolem diff`. **You can gate a PR right now** with a plain workflow step — the packaged Action (NOT BUILT #3) is the missing convenience, not the capability. Both CI snippets set full clone depth (`fetch-depth: 0` / `GIT_DEPTH: "0"`) because `diff` needs a merge base; a shallow clone silently has none. GitHub Actions `${{ … }}` expressions are escaped as `{{ '{{' }}` so Jinja doesn't eat them.
 - `keys.html` — API key management (create form + list)
 - `projects.html` — project management (create form + list + delete)
 - `terms.html` / `privacy.html` — legal pages, served by public `GET /terms` and `GET /privacy` in `main.py` (in the `JWTMiddleware` public allowlist); linked from the `base.html` footer
 - **SEO / social** — `base.html` and `landing.html` carry meta description + Open Graph + Twitter-card + canonical tags (and a `SoftwareApplication` JSON-LD block on `landing.html`). Absolute URLs use the `site_url` Jinja global (set from `SITE_URL` in `main.py`), so they're only correct when `SITE_URL` is the real origin (e.g. `https://skolem.dev`, no trailing slash). The share image is `static/img/og-image.png` (1200×630, official). Public `GET /robots.txt` + `GET /sitemap.xml` (root-served, in the `JWTMiddleware` allowlist): robots disallows `/api`, `/auth`, `/verify`, `/keys`, `/projects`, `/billing` and points at the sitemap, which lists the six public pages (`/`, `/pricing`, `/docs`, `/integrations`, `/terms`, `/privacy`). The sitemap carries **`<lastmod>` only — no `<priority>`/`<changefreq>`**, which Google ignores. `_SITEMAP_PAGES` in `main.py` holds the dates and they are **hand-maintained**: bump one only when that page's content actually changes. Never derive them from mtime or `git log` — `.dockerignore` excludes `.git/` and Render builds from a fresh clone, so both would stamp every page with the deploy date and train Google to discount `lastmod` site-wide. **`/docs` and `/openapi.json` are deliberately NOT disallowed:** every `Disallow` is a prefix match, so a `Disallow: /docs` line would silently block the whole `/docs/*` documentation tree the moment it grows a second page — and it never secured anything anyway (robots.txt is a request, not access control; the OpenAPI schema is kept private by `ENABLE_DOCS` being unset in prod, a real 404).
 - `partials/result.html` — `VerificationResult`: status badge + counterexample table + divergence reason
-- `partials/history.html` — past runs with timestamp, status badge, query preview, "View"
+- `partials/history.html` — **compact one-line rows** for the 250px workspace sidebar (short run id + coloured verdict, then time · duration). It was full-width cards built for the old 400px panel; in the sidebar those wrapped to four lines each and pushed every other run below the fold. Clicking still replays into `#result-panel` (ownership-checked server-side).
+- `partials/schema_summary.html` — parsed-schema constraints. **Known parser gap it papers over:** `_extract_foreign_keys` in `core/ddl_parser.py` returns an empty `references_columns` for an inline `REFERENCES t(c)` (sqlglot doesn't expose the column as an `exp.Column` child of the `Reference` node there), which used to render `users()`. The partial now omits the parens instead of inventing a column. **This is display-only today only because `sql_encoder.py` falls back to the referenced table's PK — an FK pointing at a non-PK UNIQUE column would encode the wrong constraint.** Worth fixing in the parser.
 - `partials/api_keys.html` — key list + the show-once raw-key banner
 - `partials/projects.html` — project list + delete buttons + inline error / empty states
 - `partials/upgrade_prompt.html` — 402 free-tier upgrade prompt
@@ -274,6 +308,60 @@ GTM roadmap note on trimming per-call cost for agent/CI traffic.
 Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache,
 shared-state rate-limiter/breaker, poison-job watchdog. Not started — see the
 scaling roadmap memory.
+
+### 5. Make the $49 Team tier real (blocks a truthful launch)
+
+**The problem.** Nothing in the code distinguishes Individual from Team — both
+are just members of `PAID_TIERS` in `api/verify.py`, so `_enforce_quota` treats
+them identically. Two root causes, and the second is the trap:
+
+1. **"Team" has no team.** A $49 subscription authorizes exactly one `user_id`,
+   same as $9. No org, no second seat, no shared anything. The noun on the plan
+   is a promise the schema can't keep.
+2. **The volume lever was already spent on Individual.** Individual is
+   *unlimited runs*. Volume is the natural way to separate a human from a
+   pipeline, and it's given away at $9 — so no amount of usage ever pushes
+   anyone to Team. Every other symptom follows from this.
+
+**The line to draw:** *Individual buys answers. Team buys enforcement.*
+Enforcement is inherently multi-person — a gate you can disable on yourself is
+a preference, not a gate. The moment a proof must hold for other people's PRs
+(people who didn't buy it and can't turn it off) you need shared identity,
+shared policy and shared history. An individual cannot buy that alone at any
+price, which is what makes the tier non-arbitrary rather than invented. It is
+also cheap here, because it is mostly re-scoping tables that already exist.
+
+Ranked by value ÷ effort:
+
+| # | Change | Why it justifies $49 | Effort |
+|---|---|---|---|
+| 1 | **Cap Individual at ~2,000 runs/month** | Restores the lever. ~66/day — no human reviewing rewrites by hand hits it; CI on a busy repo passes it in a week. Framing: *Individual is for your reviews, Team is for your pipeline.* One-line change in `_enforce_quota` | Trivial |
+| 2 | **Orgs + 5 seats** — Migration #5: `organizations`, `org_members` | Makes the arithmetic self-evident: 5 × $9 = $45 ≈ $49. Resolve plan by org membership in `_enforce_quota`; cache the org lookup the way `auth/middleware.py` already caches API keys | Medium — mirrors the existing `api_keys`/`projects` pattern |
+| 3 | **Org-scoped projects + shared run history** | The daily value: a platform team sees each other's proofs instead of each person keeping a private log. `projects.owner_id` → nullable `org_id`; same for `get_recent_runs` scoping | Small once #2 lands |
+| 4 | **The GitHub Action** (= task #3 above) | The purchase trigger, and the one thing an individual literally cannot do: enforce a verdict on someone else's PR. `skolem diff --output github --fail-on` already exists | Small — ~80% built |
+| 5 | **Server-side policy** — org owner sets `--fail-on`; a dev can't weaken it in their own PR | The sharpest team-only concept available. A `.skolem.yml` a developer can edit is not a gate; policy keyed to the org and enforced server-side is the product | Small after #2 + #4 |
+| 6 | **Org audit export** — who proved what, when, what verdict | Pure margin: every row is already in `verification_runs`. A query and a CSV endpoint | Trivial |
+
+**Sequence:** #1 immediately (costs nothing, stops the bleeding) → #4 (nearly
+done, and it's what people actually buy) → #2/#3/#5 together as the "Team is
+real now" release → #6 when a prospect asks.
+
+**Later, with the async queue (task #4):** parallel solve slots are the other
+economically honest lever. CI is bursty (a PR touching 10 query files is 10
+pairs at once) and solver time is the real cost. Individual serial, Team
+N-concurrent. Charging for compute actually spent is defensible in a way that
+charging for a stronger verdict never is.
+
+**If launching before any of this is built:** pull Team from `pricing.html` and
+ship Free + Individual with a "Team plans — talk to us" contact link, or price
+Team at $19 described truthfully as support + early Action access. A tier that
+can't be delivered is worse than one that isn't listed — the first person who
+buys $49 and finds it identical to $9 is a refund plus a bad thread.
+
+**Do NOT gate bound, timeout, or SQL coverage** — see the decision table row.
+Those change what a verdict *means*, and a "proven equivalent" that is weaker
+because of the plan corrodes the one thing being sold. Meter seats, volume,
+concurrency and enforcement; never the strength of the proof.
 
 ---
 
@@ -330,7 +418,7 @@ All suites are standalone (no pytest required, but pytest-compatible):
 
 | Decision | Rationale |
 |---|---|
-| `bound=3` hardcoded in `equivalence.py` | Catches >95% of real SQL semantic bugs. Not exposed in UI — would confuse engineers. Power users can override via env var. |
+| `bound=3` default (`DEFAULT_BOUND` in `core/sql_encoder.py`), exposed in the UI's **Advanced settings** | Catches >95% of real SQL semantic bugs, so it stays the default and the panel stays collapsed — the common path is still a three-field form. It is surfaced rather than hidden because the bound changes *what a verdict means*, and an engineer who can't see it can't calibrate trust in an "equivalent". The control ships **with** its explanation (symbolic-not-sampled, proof-within-bound, `bound^tables` cost, `unknown` ≠ pass) — never expose the number alone. `DEFAULT_BOUND` is imported, never retyped, in `api/verify.py` (both endpoints) and rendered into the form + docs from there. |
 | Join scope: any left-deep chain mixing INNER/LEFT/RIGHT/FULL | `build_join_bag()` folds `FROM` + every `JOIN` left-deep, one table at a time, into a single bag of `(present, cellfn)` entries — VeriEQL's own binary join operator (Fig. 4/5's `Q⊗Q`) generalized to an N-table chain, since the paper has no native N-ary join either. ON and WHERE are kept strictly separate throughout the fold; WHERE is applied once, to the final tuple, never during matching — that's what keeps ON-vs-WHERE faithful at every chain level, not just a two-table case. A LEFT/FULL step null-extends the newly joined table for any accumulated row with no match; a RIGHT/FULL step null-extends the WHOLE accumulated left relation (every alias joined so far) for any new-table row with no match — mirrors the paper's `T_Null` being as wide as the left operand, so a RIGHT/FULL deeper in a chain nulls every earlier alias in that output row, not just its immediate predecessor. Each join's ON may only reference the table being joined or a table already in scope (forward references aren't valid SQL either, so this narrows nothing real). GROUP BY runs generically over the bag (NULL-safe key equality), so group keys may come from any table in the chain, including a null-extended outer side — no more FROM-table-only or non-nullable-key restriction. Still no window functions, UNION, CROSS, or self-joins. A materialized CTE relation combined with an outer join anywhere in the same query is still rejected fail-closed (see Known limitations). (Non-recursive CTEs and uncorrelated `IN (SELECT …)` WHERE subqueries ARE supported.) |
 | Fail-closed parsing/encoding | Any SQL construct outside the supported subset raises `ValueError` (→ status `error`) instead of being silently dropped. A dropped predicate or SELECT expression weakens the encoding and can produce a false "equivalent" — the one failure mode a verifier must not have. Never "skip" unsupported syntax. |
 | Witness cross-check in `equivalence.py` | After Z3 finds a divergence, both queries run on the SQLite witness; if their outputs agree, the verdict is downgraded to `error` (encoder bug) instead of showing a fake counterexample. |
@@ -347,9 +435,11 @@ All suites are standalone (no pytest required, but pytest-compatible):
 | Per-IP rate limiting (slowapi) | The two solve endpoints are `@limiter.limit`-decorated (default 30/min). Verification is expensive, so an unthrottled endpoint lets one client pin a worker. The `limiter` lives in `api/verify.py`; it is attached to the app + given its 429 handler in `main.py`. |
 | Circuit breaker on LLM calls | `explainer/circuit_breaker.py` fails fast when the provider is down so an outage doesn't burn credits/latency. Per-process state. |
 | Free-tier quota fails **open** | `_enforce_quota` returns the request through on any billing/DB lookup error — a metering hiccup must never block a paying or free user mid-work. |
+| **Never meter the strength of a proof** | `bound`, the solver timeouts and the supported SQL subset are identical on every plan, free included, and must stay that way. Gating them would make an "equivalent" verdict mean something different depending on what the caller paid — corroding the one property the product sells. Meter seats, volume, concurrency and enforcement instead (see NOT BUILT #5). `pricing.html` states this as a feature, so a change here contradicts the public page. |
 | Two auth paths, one `user_id` | Session JWT (browser) **or** per-user API key (CI), both resolved by `JWTMiddleware` into `request.state.user_id`. Access control is enforced in app code (ownership checks + repo `user_id` scoping), **not** RLS — the service key bypasses RLS. |
 | Billing via Lemon Squeezy (MoR) | Merchant of Record handles global VAT; we never touch card data. Plan/quota resolve by `user_id`, stamped onto the subscription via LS checkout custom data. Rate-limiter / breaker / API-key cache are per-process — move to shared state when scaling to multiple workers. |
 | CORS pinned, no wildcard | `main.py` allows only `SITE_URL` + localhost, `GET`/`POST`, with credentialed CORS **off**. An explicit allowlist keeps JSON responses from being read by arbitrary origins. |
+| **Fonts are self-hosted** | Inter + JetBrains Mono ship from `web/static/fonts/`, declared in `tokens/fonts.css`. `_csp_header()` therefore carries `style-src 'self' 'unsafe-inline'` and `font-src 'self'` — **no `fonts.googleapis.com`/`fonts.gstatic.com`**. Never re-add a Google Fonts `<link>`: it would silently do nothing under this CSP (the stylesheet would be blocked, text would fall back to system fonts), and it hands a third party every visitor's IP + User-Agent on a product sold on not touching your data. One variable Inter face covers 100–900, so a new weight needs no new file. Both faces are preloaded in `base.html`/`landing.html` because the `@font-face` rules sit two `@import` levels deep and can't be discovered until both sheets parse. |
 | CSRF via `SameSite=Lax` + POST-only mutations | No CSRF token by design. Session cookies are `SameSite=Lax` (`api/auth.py`), so cross-site POSTs don't carry them; all mutations are `POST` (logout too — so an `<img>`/prefetch can't trigger it); the CI/API path uses `Bearer`/`X-API-Key` (no ambient credentials, structurally CSRF-immune). Add a double-submit token only if a security review requires defense-in-depth. Lax (not Strict) is deliberate — Strict breaks the OAuth redirect-back. |
 
 ---

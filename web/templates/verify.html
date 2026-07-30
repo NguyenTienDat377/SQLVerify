@@ -1,359 +1,507 @@
-{% extends "base.html" %} {% block content %}
-<!-- Left Panel: Input -->
-<aside class="panel panel-left" id="left-panel">
-  <!-- Project selector: tags new runs and filters the History tab. -->
-  <div style="margin-bottom: 1rem;">
-    <label
-      for="project-select"
-      style="display: block; font-weight: 600; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.35rem;"
-      >Project</label
-    >
-    <select
-      id="project-select"
-      name="project_id"
-      class="form-select"
-    >
-      <option value="">No project — all runs</option>
-      {% for p in projects %}
-      <option value="{{ p.id }}">{{ p.name }}</option>
-      {% endfor %}
-    </select>
-    {% if not projects %}
-    <p style="font-size: 0.75rem; color: var(--text-secondary); margin: 0.4rem 0 0;">
-      <a href="/projects" style="color: inherit;">Create a project</a> to organize your runs.
-    </p>
-    {% endif %}
-  </div>
+{% extends "base.html" %} {% block title %}Workspace — Skolem{% endblock %}
+{% block content %}
 
-  <div class="tabs">
-    <div class="tab active" id="tab-sql">
-      SQL Input
+<!-- Verification workspace. Three-column shell ported from the "Skolem landing
+     page redesign" Claude Design project (Workspace.dc.html):
+       sidebar (project + input nav + recent proofs) | editor | results.
+
+     Deliberately NOT ported from that mockup, because the data doesn't exist:
+     the trace and smt2 tabs (no stage timings are emitted and Z3 assertions are
+     never exported), the pair hash / assertion count / elapsed figures, the
+     "412 / 500 proofs" quota chip, "cached pairs are free" (there is no result
+     cache) and the eq/div/unk/err outcome picker (a mockup preview device).
+     Also NOT ported: the mockup's bare +/- bound stepper — the bound must ship
+     with its explanation, see CLAUDE.md's decision table.
+
+     Kept from the previous workspace because they are real and load-bearing:
+     the file-upload path (Flyway DDL), the dialect selector, the schema summary
+     panel, and Advanced settings. Every HTMX contract below is unchanged. -->
+
+<div class="sk-ws">
+
+  <!-- ── Column 1: sidebar ── -->
+  <aside class="sk-ws-side" id="left-panel">
+    <div class="sk-side-block">
+      <div class="sk-side-h">workspace</div>
+      <!-- Project selector: tags new runs and filters recent proofs. Lives
+           outside #verify-form on purpose — the form and the history panel both
+           pull it in with hx-include, so one control drives both. -->
+      <select id="project-select" name="project_id" class="form-select sk-side-select">
+        <option value="">No project — all runs</option>
+        {% for p in projects %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+        {% endfor %}
+      </select>
+      {% if not projects %}
+      <p class="sk-side-note">
+        <a href="/projects">Create a project</a> to organize runs.
+      </p>
+      {% endif %}
     </div>
+
+    <div class="sk-side-h sk-side-h-pad">inputs</div>
+    <div class="sk-side-files">
+      <button type="button" class="sk-side-file" data-jump="pane-schema">
+        <span class="sk-file-dot sk-dot-schema"></span>schema.ddl
+      </button>
+      <button type="button" class="sk-side-file" data-jump="pane-v1">
+        <span class="sk-file-dot sk-dot-v1"></span>original.sql
+      </button>
+      <button type="button" class="sk-side-file" data-jump="pane-v2">
+        <span class="sk-file-dot sk-dot-v2"></span>rewrite.sql
+      </button>
+    </div>
+
+    <div class="sk-side-h sk-side-h-pad">recent proofs</div>
+    <!-- Was a "History" tab in the left panel; it is always-on here. Reloads on
+         first paint, whenever the project changes, and whenever a run finishes
+         (the refreshHistory event is dispatched from the script below). -->
     <div
-      class="tab"
-      id="tab-history"
+      id="history-panel"
+      class="sk-side-history"
       hx-get="/api/history"
+      hx-trigger="load, refreshHistory from:body"
       hx-target="#history-panel"
       hx-swap="innerHTML"
-      hx-trigger="click"
       hx-include="#project-select"
     >
-      History
+      <div class="sk-side-empty">Loading…</div>
     </div>
-  </div>
 
-  <!-- SQL Input Panel -->
-  <div id="sql-panel">
+    <div class="sk-side-foot">
+      bound 1–{{ max_bound }} on every plan<br />
+      proofs are scoped to the schema you supply
+    </div>
+  </aside>
+
+  <!-- ── Column 2: editor ── -->
+  <section class="sk-ws-editor">
+    <div class="sk-ws-chrome">
+      <button type="button" id="toggle-sidebar-btn" class="sk-chrome-btn" title="Toggle sidebar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="9" y1="3" x2="9" y2="21"></line>
+        </svg>
+      </button>
+      <span class="sk-chrome-active">editor</span>
+      <span class="sk-chrome-meta" id="chrome-dialect">generic · utf-8 · lf</span>
+    </div>
+
     <form
       id="verify-form"
+      class="sk-ws-form"
       hx-post="/api/verify"
       hx-encoding="multipart/form-data"
       hx-target="#result-panel"
       hx-swap="innerHTML"
       hx-include="#project-select"
     >
-      <!-- Upload Zones -->
-      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-          <label style="margin: 0; font-weight: 600;">Schema / DDL</label>
-          <div class="segmented-control">
-            <label><input type="radio" name="schema_input_type" value="file" checked> File</label>
-            <label><input type="radio" name="schema_input_type" value="text"> Text</label>
+      <div class="sk-ws-panes">
+
+        <!-- schema.ddl -->
+        <div class="sk-pane" id="pane-schema">
+          <div class="sk-pane-head">
+            <span class="sk-file-dot sk-dot-schema"></span>
+            <span class="sk-pane-name">schema.ddl</span>
+            <span class="sk-pane-hint">Flyway DDL — file or paste</span>
+            <div class="segmented-control sk-pane-seg">
+              <label><input type="radio" name="schema_input_type" value="file" checked /> File</label>
+              <label><input type="radio" name="schema_input_type" value="text" /> Text</label>
+            </div>
+          </div>
+
+          <div class="upload-zone sk-pane-upload" id="schema_file_container">
+            <input
+              type="file"
+              name="schema_file"
+              accept=".sql"
+              hx-post="/api/verify/extract-constraints"
+              hx-target="#schema-summary-panel"
+              hx-trigger="change"
+              hx-encoding="multipart/form-data"
+              hx-include="[name='dialect']"
+            />
+            <div class="file-display text-muted">Click or drag Flyway DDL file here</div>
+          </div>
+
+          <div class="sk-editor is-hidden" id="schema_text_container">
+            <div class="sk-gutter" aria-hidden="true">1</div>
+            <textarea
+              name="schema_text"
+              class="sk-code-input"
+              spellcheck="false"
+              placeholder="CREATE TABLE users (&#10;  id   INTEGER PRIMARY KEY,&#10;  name TEXT NOT NULL&#10;);"
+              hx-post="/api/verify/extract-constraints"
+              hx-target="#schema-summary-panel"
+              hx-trigger="input changed delay:500ms, change"
+              hx-include="[name='dialect']"
+            ></textarea>
+          </div>
+
+          <!-- Parsed-schema summary. This used to live inside #result-panel,
+               which meant the first verification swapped it away and every later
+               schema edit had no target left to swap into — the panel silently
+               stopped updating. It belongs beside the schema input anyway. -->
+          <div id="schema-summary-panel" class="sk-schema-summary">
+            {% include 'partials/schema_summary.html' %}
           </div>
         </div>
-        <div class="upload-zone" id="schema_file_container">
-          <input type="file" name="schema_file" accept=".sql" 
-                 hx-post="/api/verify/extract-constraints"
-                 hx-target="#schema-summary-panel"
-                 hx-trigger="change"
-                 hx-encoding="multipart/form-data"
-                 hx-include="[name='dialect']" />
-          <div class="file-display text-muted">
-            Click or drag Flyway DDL file here
+
+        <!-- original.sql -->
+        <div class="sk-pane" id="pane-v1">
+          <div class="sk-pane-head">
+            <span class="sk-file-dot sk-dot-v1"></span>
+            <span class="sk-pane-name">original.sql</span>
+            <span class="sk-pane-hint">the trusted query</span>
+            <div class="segmented-control sk-pane-seg">
+              <label><input type="radio" name="query_v1_input_type" value="file" checked /> File</label>
+              <label><input type="radio" name="query_v1_input_type" value="text" /> Text</label>
+            </div>
+          </div>
+
+          <div class="upload-zone sk-pane-upload" id="query_v1_file_container">
+            <input type="file" name="query_v1_file" accept=".sql" />
+            <div class="file-display text-muted">Click or drag original .sql file</div>
+          </div>
+
+          <div class="sk-editor is-hidden" id="query_v1_text_container">
+            <div class="sk-gutter" aria-hidden="true">1</div>
+            <textarea
+              name="query_v1_text"
+              class="sk-code-input"
+              spellcheck="false"
+              placeholder="SELECT u.id, COUNT(o.id) AS n&#10;FROM users u&#10;LEFT JOIN orders o ON o.user_id = u.id&#10;GROUP BY u.id;"
+            ></textarea>
           </div>
         </div>
-        <div id="schema_text_container" style="display: none;">
-          <textarea name="schema_text" class="form-input" style="height: 100px; font-family: var(--font-mono); resize: vertical;" placeholder="Paste schema SQL here..."
-                    hx-post="/api/verify/extract-constraints"
-                    hx-target="#schema-summary-panel"
-                    hx-trigger="input changed delay:500ms, change"
-                    hx-include="[name='dialect']"></textarea>
+
+        <!-- rewrite.sql -->
+        <div class="sk-pane" id="pane-v2">
+          <div class="sk-pane-head">
+            <span class="sk-file-dot sk-dot-v2"></span>
+            <span class="sk-pane-name">rewrite.sql</span>
+            <span class="sk-pane-hint">the AI-generated query</span>
+            <div class="segmented-control sk-pane-seg">
+              <label><input type="radio" name="query_v2_input_type" value="file" checked /> File</label>
+              <label><input type="radio" name="query_v2_input_type" value="text" /> Text</label>
+            </div>
+          </div>
+
+          <div class="upload-zone sk-pane-upload" id="query_v2_file_container">
+            <input type="file" name="query_v2_file" accept=".sql" />
+            <div class="file-display text-muted">Click or drag generated .sql file</div>
+          </div>
+
+          <div class="sk-editor is-hidden" id="query_v2_text_container">
+            <div class="sk-gutter" aria-hidden="true">1</div>
+            <textarea
+              name="query_v2_text"
+              class="sk-code-input"
+              spellcheck="false"
+              placeholder="SELECT u.id, COUNT(*) AS n&#10;FROM users u&#10;JOIN orders o ON o.user_id = u.id&#10;GROUP BY u.id;"
+            ></textarea>
+          </div>
         </div>
       </div>
 
-      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-          <label style="margin: 0; font-weight: 600;">Original Query</label>
-          <div class="segmented-control">
-            <label><input type="radio" name="query_v1_input_type" value="file" checked> File</label>
-            <label><input type="radio" name="query_v1_input_type" value="text"> Text</label>
-          </div>
-        </div>
-        <div class="upload-zone" id="query_v1_file_container">
-          <input type="file" name="query_v1_file" accept=".sql" />
-          <div class="file-display text-muted">
-            Click or drag original .sql file
-          </div>
-        </div>
-        <div id="query_v1_text_container" style="display: none;">
-          <textarea name="query_v1_text" class="form-input" style="height: 100px; font-family: var(--font-mono); resize: vertical;" placeholder="Paste original query here..."></textarea>
-        </div>
-      </div>
-
-      <div class="input-group-wrapper" style="margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-          <label style="margin: 0; font-weight: 600;">AI-Generated Query</label>
-          <div class="segmented-control">
-            <label><input type="radio" name="query_v2_input_type" value="file" checked> File</label>
-            <label><input type="radio" name="query_v2_input_type" value="text"> Text</label>
-          </div>
-        </div>
-        <div class="upload-zone" id="query_v2_file_container">
-          <input type="file" name="query_v2_file" accept=".sql" />
-          <div class="file-display text-muted">
-            Click or drag generated .sql file
-          </div>
-        </div>
-        <div id="query_v2_text_container" style="display: none;">
-          <textarea name="query_v2_text" class="form-input" style="height: 100px; font-family: var(--font-mono); resize: vertical;" placeholder="Paste generated query here..."></textarea>
-        </div>
-      </div>
-
-      <!-- Settings -->
-      <div class="form-group" style="margin-top: 1.5rem">
-        <label class="form-label">SQL Dialect</label>
-        <select name="dialect" class="form-select"
+      <!-- Run controls, pinned to the column floor like the mockup's footer. -->
+      <div class="sk-run-bar">
+        <div class="sk-run-controls">
+          <div class="sk-control-card">
+            <div class="sk-control-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="16 18 22 12 16 6"></polyline>
+                <polyline points="8 6 2 12 8 18"></polyline>
+              </svg>
+            </div>
+            <div class="sk-control-body">
+              <label class="sk-control-title" for="dialect-select">Dialect</label>
+              <select
+                name="dialect"
+                id="dialect-select"
+                class="form-select sk-control-select"
                 hx-post="/api/verify/extract-constraints"
                 hx-target="#schema-summary-panel"
                 hx-trigger="change"
-                hx-include="[name='schema_text']">
-          <option value="generic">Generic SQL</option>
-          <option value="postgres">PostgreSQL</option>
-          <option value="mysql">MySQL</option>
-          <option value="sqlite">SQLite</option>
-        </select>
-      </div>
-
-      <!-- AI Explanation toggle -->
-      <label class="checkbox-item" style="margin-top: 1.25rem; cursor: pointer">
-        <input type="checkbox" name="explain" value="true" />
-        <div>
-          <div class="checkbox-label">Request AI Explanation</div>
-          <div class="checkbox-desc">
-            Uses AI to explain divergences in plain English.
+                hx-include="[name='schema_text']"
+              >
+                <option value="generic">Generic SQL</option>
+                <option value="postgres">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+                <option value="sqlite">SQLite</option>
+              </select>
+            </div>
           </div>
-        </div>
-      </label>
 
-      <!-- Submit Button -->
-      <button type="submit" class="btn btn-primary" style="margin-top: 1rem">
-        <span class="btn-text">Run Verification</span>
-        <span class="htmx-indicator">
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            xmlns="http://www.w3.org/2000/svg"
-            stroke="currentColor"
-          >
-            <g fill="none" fill-rule="evenodd" stroke-width="2">
-              <circle cx="12" cy="12" r="1">
-                <animate
-                  attributeName="r"
-                  begin="0s"
-                  calcMode="spline"
-                  dur="1.8s"
-                  keySplines="0.165, 0.84, 0.44, 1"
-                  keyTimes="0; 1"
-                  repeatCount="indefinite"
-                  values="1; 10"
-                />
-                <animate
-                  attributeName="stroke-opacity"
-                  begin="0s"
-                  calcMode="spline"
-                  dur="1.8s"
-                  keySplines="0.3, 0.61, 0.355, 1"
-                  keyTimes="0; 1"
-                  repeatCount="indefinite"
-                  values="1; 0"
-                />
-              </circle>
-              <circle cx="12" cy="12" r="1">
-                <animate
-                  attributeName="r"
-                  begin="-0.9s"
-                  calcMode="spline"
-                  dur="1.8s"
-                  keySplines="0.165, 0.84, 0.44, 1"
-                  keyTimes="0; 1"
-                  repeatCount="indefinite"
-                  values="1; 10"
-                />
-                <animate
-                  attributeName="stroke-opacity"
-                  begin="-0.9s"
-                  calcMode="spline"
-                  dur="1.8s"
-                  keySplines="0.3, 0.61, 0.355, 1"
-                  keyTimes="0; 1"
-                  repeatCount="indefinite"
-                  values="1; 0"
-                />
-              </circle>
-            </g>
-          </svg>
-        </span>
-      </button>
+          <label class="sk-control-card sk-control-card--toggle">
+            <div class="sk-control-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <div class="sk-control-body">
+              <span class="sk-control-title">AI explanation</span>
+              <span class="sk-control-hint">Plain-English reading of any divergence</span>
+            </div>
+            <input type="checkbox" name="explain" value="true" id="explain-check" class="sk-toggle-input" />
+            <span class="sk-toggle-track"><span class="sk-toggle-thumb"></span></span>
+          </label>
+        </div>
+
+        <!--
+          Advanced settings. Collapsed by default and deliberately so: the bound
+          is the one knob that changes what a verdict *means*, so it is shown
+          with the explanation attached rather than as a bare number an engineer
+          would have to guess at. Options are rendered from the server's limits
+          (max_bound / max_timeout_ms) so the form can never offer a value the
+          endpoint rejects.
+        -->
+        <details class="advanced-settings" id="advanced-settings"
+                 data-default-bound="{{ default_bound }}"
+                 data-default-timeout="{{ default_timeout_ms }}">
+          <summary>
+            <span class="advanced-summary-label">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="advanced-chevron"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              Advanced settings
+            </span>
+            <span class="advanced-summary-value" id="advanced-summary-value"></span>
+          </summary>
+
+          <div class="advanced-body">
+            <div class="form-group">
+              <label class="form-label" for="bound-select">Row bound</label>
+              <select name="bound" id="bound-select" class="form-select">
+                {% for b in range(1, max_bound + 1) %}
+                <option value="{{ b }}" {% if b == default_bound %}selected{% endif %}>
+                  {{ b }} row{{ '' if b == 1 else 's' }} per table{% if b == default_bound %} — default{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+
+              <div class="advanced-help">
+                <p>
+                  Maximum rows per table that Z3 explores symbolically.
+                  Higher = stronger proof but slower; cost grows exponentially with joins.
+                </p>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0;">
+              <label class="form-label" for="timeout-select">Solver timeout</label>
+              <select name="timeout_ms" id="timeout-select" class="form-select">
+                {% for ms in [5000, 15000, 30000, 60000] if ms <= max_timeout_ms %}
+                <option value="{{ ms }}" {% if ms == default_timeout_ms %}selected{% endif %}>
+                  {{ ms // 1000 }} seconds{% if ms == default_timeout_ms %} — default{% endif %}
+                </option>
+                {% endfor %}
+              </select>
+              <div class="advanced-help">
+                <p>
+                  How long Z3 may search before giving up and reporting
+                  <code>unknown</code>. It is a budget, not a delay — most solves finish far inside
+                  it. Pair a raised bound with a longer timeout.
+                </p>
+              </div>
+              <p class="advanced-warning" id="bound-timeout-hint" hidden>
+                A bound this high on a multi-table join often needs more than
+                {{ default_timeout_ms // 1000 }}s — consider raising the timeout too, or you may get
+                <code>unknown</code>.
+              </p>
+            </div>
+          </div>
+        </details>
+
+        <button type="submit" class="btn btn-primary btn-glow sk-ws-run">
+          <span class="btn-text">Run proof</span>
+          <span class="htmx-indicator">
+            <svg width="20" height="20" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" stroke="currentColor">
+              <g fill="none" fill-rule="evenodd" stroke-width="2">
+                <circle cx="12" cy="12" r="1">
+                  <animate attributeName="r" begin="0s" calcMode="spline" dur="1.8s" keySplines="0.165, 0.84, 0.44, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 10" />
+                  <animate attributeName="stroke-opacity" begin="0s" calcMode="spline" dur="1.8s" keySplines="0.3, 0.61, 0.355, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 0" />
+                </circle>
+                <circle cx="12" cy="12" r="1">
+                  <animate attributeName="r" begin="-0.9s" calcMode="spline" dur="1.8s" keySplines="0.165, 0.84, 0.44, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 10" />
+                  <animate attributeName="stroke-opacity" begin="-0.9s" calcMode="spline" dur="1.8s" keySplines="0.3, 0.61, 0.355, 1" keyTimes="0; 1" repeatCount="indefinite" values="1; 0" />
+                </circle>
+              </g>
+            </svg>
+          </span>
+        </button>
+      </div>
     </form>
-  </div>
+  </section>
 
-  <!-- History Panel (hidden by default) -->
-  <div id="history-panel" style="display: none">
-    <div
-      style="
-        color: var(--text-secondary);
-        font-size: 0.875rem;
-        text-align: center;
-        padding: 2rem 0;
-      "
-    >
-      Loading history...
+  <!-- ── Column 3: results ── -->
+  <section class="sk-ws-results">
+    <div class="sk-ws-chrome">
+      <button type="button" id="toggle-editor-btn" class="sk-chrome-btn" title="Toggle editor pane">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <line x1="15" y1="3" x2="15" y2="21"></line>
+        </svg>
+      </button>
+      <span class="sk-chrome-active">verdict</span>
+      <span class="sk-chrome-meta">z3 · bag semantics</span>
     </div>
-  </div>
-</aside>
 
-<!-- Right Panel: Results / Stubs -->
-<section class="panel panel-right">
-  <div style="margin-bottom: 1rem;">
-    <button id="toggle-sidebar-btn" class="btn btn-secondary" style="padding: 0.4rem 0.6rem; display: inline-flex; align-items: center; gap: 0.5rem;" title="Toggle Sidebar">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-        <line x1="9" y1="3" x2="9" y2="21"></line>
-      </svg>
-      <span style="font-size: 0.75rem;">Toggle Input</span>
-    </button>
-  </div>
-  <div id="result-panel" class="result-container">
-    <!-- Default Empty State / Stubs -->
-    <div style="opacity: 0.5; max-width: 600px">
-      <div style="margin-bottom: 2rem">
-        <h3
-          style="
-            margin-bottom: 1rem;
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-          "
-        >
-          From Schema (Auto)
-        </h3>
-        <div
-          id="schema-summary-panel"
-          style="
-            background-color: var(--bg-color);
-            padding: 1rem;
-            border: 1px dashed var(--panel-border);
-            border-radius: 6px;
-            font-family: var(--font-mono);
-          "
-        >
-          {% include 'partials/schema_summary.html' %}
-        </div>
-      </div>
-
-      <div>
-        <h3
-          style="
-            margin-bottom: 1rem;
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-          "
-        >
-          Quick Start Guide
-        </h3>
-        <div style="display: flex; flex-direction: column; gap: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
-          <div style="display: flex; gap: 0.75rem;">
-            <div style="background: rgba(255,255,255,0.1); width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold; flex-shrink: 0; color: var(--text-primary);">1</div>
-            <div><strong style="color: var(--text-primary);">Upload Schema:</strong> Provide your Flyway DDL file so we can map out your tables and constraints.</div>
-          </div>
-          <div style="display: flex; gap: 0.75rem;">
-            <div style="background: rgba(255,255,255,0.1); width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold; flex-shrink: 0; color: var(--text-primary);">2</div>
-            <div><strong style="color: var(--text-primary);">Original Query:</strong> Enter the known-good SQL query that you want to match.</div>
-          </div>
-          <div style="display: flex; gap: 0.75rem;">
-            <div style="background: rgba(255,255,255,0.1); width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: bold; flex-shrink: 0; color: var(--text-primary);">3</div>
-            <div><strong style="color: var(--text-primary);">AI Query:</strong> Provide the generated query, then click "Run Verification" to prove equivalence.</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Pro Tip Card -->
-      <div style="margin-top: 2rem; background: rgba(0, 122, 255, 0.05); border: 1px solid rgba(0, 122, 255, 0.2); border-radius: 8px; padding: 1.25rem;">
-        <h3 style="margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--primary-color); display: flex; align-items: center; gap: 0.5rem;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"></path><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-          Pro Tip: Use Your IDE
-        </h3>
-        <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem; line-height: 1.4;">
-          Prefer not leaving your editor? Verify queries automatically during generation using our MCP Server, or integrate into CI/CD with our CLI.
+    <div id="result-panel" class="sk-result-scroll">
+      <div class="sk-idle">
+        <div class="sk-idle-dot"><span></span>no proof for this pair yet</div>
+        <p class="sk-idle-lede">
+          Give Skolem a schema and two queries. It compiles both to SMT
+          constraints and asks Z3 whether any database within the bound makes
+          them disagree — no sample data, no test fixtures.
         </p>
-        <a href="/integrations" style="font-size: 0.85rem; font-weight: 500; color: var(--primary-color); text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem;">
-          Setup Integrations
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-        </a>
+
+        <ol class="sk-steps">
+          <li>
+            <span class="sk-step-n">1</span>
+            <div><strong>Schema</strong> — upload or paste your Flyway DDL so keys,
+              NOT NULLs and foreign keys constrain the counterexample.</div>
+          </li>
+          <li>
+            <span class="sk-step-n">2</span>
+            <div><strong>original.sql</strong> — the query you already trust.</div>
+          </li>
+          <li>
+            <span class="sk-step-n">3</span>
+            <div><strong>rewrite.sql</strong> — the AI-generated version, then
+              <em>Run proof</em>.</div>
+          </li>
+        </ol>
+
+        <div class="sk-idle-tip">
+          <div class="sk-idle-tip-h">Skip the browser</div>
+          <p>
+            Verify inside your editor with the MCP server, or gate pull requests
+            with the CLI. <a href="/integrations">Set up integrations →</a>
+          </p>
+        </div>
       </div>
     </div>
-  </div>
-</section>
+
+    <div class="sk-ws-status">
+      <span id="status-left">ready</span>
+      <span id="status-right">bound {{ default_bound }} · {{ default_timeout_ms // 1000 }}s</span>
+    </div>
+  </section>
+</div>
 
 <script nonce="{{ request.state.csp_nonce }}">
-  function switchTab(tab) {
-    document
-      .querySelectorAll(".tab")
-      .forEach((t) => t.classList.remove("active"));
-    document.getElementById("tab-" + tab).classList.add("active");
-    document.getElementById("sql-panel").style.display =
-      tab === "sql" ? "block" : "none";
-    document.getElementById("history-panel").style.display =
-      tab === "history" ? "block" : "none";
-  }
-
+  // ── Input source toggle (File vs Text) ────────────────────────────────────
+  // Toggles a class rather than writing style.display, so CSS keeps ownership
+  // of how each container lays out (the editor is a flex row for its gutter;
+  // an inline `display: block` from JS would flatten it).
   function toggleInput(field, type) {
-    if (type === 'file') {
-      document.getElementById(field + '_file_container').style.display = 'block';
-      document.getElementById(field + '_text_container').style.display = 'none';
-      // Clear textarea so backend prefers file
-      document.querySelector(`[name="${field}_text"]`).value = '';
+    const fileBox = document.getElementById(field + "_file_container");
+    const textBox = document.getElementById(field + "_text_container");
+    fileBox.classList.toggle("is-hidden", type !== "file");
+    textBox.classList.toggle("is-hidden", type === "file");
+    // Clear whichever side is now inactive so the backend's file-or-text
+    // precedence can't read a stale value the user can no longer see.
+    if (type === "file") {
+      document.querySelector(`[name="${field}_text"]`).value = "";
     } else {
-      document.getElementById(field + '_file_container').style.display = 'none';
-      document.getElementById(field + '_text_container').style.display = 'block';
-      // Clear file input so backend prefers text
-      document.querySelector(`[name="${field}_file"]`).value = '';
+      document.querySelector(`[name="${field}_file"]`).value = "";
     }
+    syncGutters();
   }
 
-  // Wire the tab and input-type controls here instead of inline onclick=
-  // attributes, which a nonce-based CSP (no 'unsafe-inline') would block.
-  document.getElementById("tab-sql")
-    .addEventListener("click", () => switchTab("sql"));
-  document.getElementById("tab-history")
-    .addEventListener("click", () => switchTab("history"));
-  document.querySelectorAll(".segmented-control input[type=radio]")
-    .forEach((r) =>
-      r.addEventListener("change", () =>
-        toggleInput(r.name.replace("_input_type", ""), r.value)
-      )
-    );
+  document.querySelectorAll(".segmented-control input[type=radio]").forEach((r) =>
+    r.addEventListener("change", () =>
+      toggleInput(r.name.replace("_input_type", ""), r.value)
+    )
+  );
 
-  // showView lived in an inline <script> inside the result partial, which HTMX
-  // swaps in via AJAX — a nonce cannot authorise a script inserted after load,
-  // so it is handled here with event delegation on the document instead. The
-  // toggle buttons carry data-view; this listener catches clicks on them even
-  // after the partial is swapped into #result-panel.
-  // Client-side JSON syntax highlighting for the Raw JSON view. Escapes HTML
-  // first — divergence_reason/error_message can contain arbitrary text from
-  // the queries being verified, so this must never trust it as markup.
+  // ── Line-number gutters ───────────────────────────────────────────────────
+  // A plain textarea keeps the form POST, HTMX bindings and native undo intact;
+  // the gutter is a sibling that mirrors the line count and scroll offset. It's
+  // aria-hidden — the numbers are decoration, and a screen reader announcing
+  // "1 2 3 4" before the code would be worse than silence.
+  function gutterFor(ta) {
+    return ta.parentElement.querySelector(".sk-gutter");
+  }
+
+  function syncGutter(ta) {
+    const gutter = gutterFor(ta);
+    if (!gutter) return;
+    const lines = ta.value.split("\n").length || 1;
+    if (gutter.childElementCount !== lines) {
+      gutter.textContent = "";
+      const frag = document.createDocumentFragment();
+      for (let i = 1; i <= lines; i++) {
+        const d = document.createElement("div");
+        d.textContent = i;
+        frag.appendChild(d);
+      }
+      gutter.appendChild(frag);
+    }
+    gutter.scrollTop = ta.scrollTop;
+  }
+
+  function syncGutters() {
+    document.querySelectorAll(".sk-code-input").forEach(syncGutter);
+  }
+
+  document.querySelectorAll(".sk-code-input").forEach((ta) => {
+    ta.addEventListener("input", () => syncGutter(ta));
+    ta.addEventListener("scroll", () => syncGutter(ta));
+  });
+  syncGutters();
+
+  // ── Sidebar & Editor toggles ─────────────────────────────────────────────
+  document.getElementById("toggle-sidebar-btn").addEventListener("click", () => {
+    document.getElementById("left-panel").classList.toggle("collapsed");
+  });
+
+  document.getElementById("toggle-editor-btn").addEventListener("click", () => {
+    document.querySelector(".sk-ws-editor").classList.toggle("collapsed");
+  });
+
+  document.querySelectorAll("[data-jump]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const pane = document.getElementById(btn.dataset.jump);
+      if (!pane) return;
+      pane.scrollIntoView({ behavior: "smooth", block: "start" });
+      pane.classList.add("is-flashed");
+      setTimeout(() => pane.classList.remove("is-flashed"), 700);
+    });
+  });
+
+  // Recent proofs follow the selected project, and refresh once a run lands so
+  // the sidebar isn't stale the moment you finish a verification.
+  const projectSelect = document.getElementById("project-select");
+  projectSelect.addEventListener("change", () =>
+    document.body.dispatchEvent(new CustomEvent("refreshHistory"))
+  );
+
+  // ── Status bar + result-driven refresh ────────────────────────────────────
+  const statusLeft = document.getElementById("status-left");
+
+  document.body.addEventListener("htmx:beforeRequest", (e) => {
+    if (e.target.id === "verify-form") statusLeft.textContent = "z3 running…";
+  });
+
+  document.body.addEventListener("htmx:afterSwap", (e) => {
+    if (e.target.id !== "result-panel") return;
+    document.body.dispatchEvent(new CustomEvent("refreshHistory"));
+    // Read the verdict off the swapped-in partial rather than tracking it in
+    // JS, so the status line can never disagree with what's on screen.
+    const badge = e.target.querySelector(".status-badge");
+    statusLeft.textContent = badge
+      ? badge.textContent.trim().toLowerCase()
+      : "ready";
+  });
+
+  document.body.addEventListener("htmx:responseError", (e) => {
+    if (e.target.id === "verify-form") statusLeft.textContent = "request failed";
+  });
+
+  // ── Result view toggle (Plain English / Raw JSON) ─────────────────────────
+  // Lives here, not in the partial: HTMX swaps that partial in after load, and
+  // a script inserted that way cannot carry a valid CSP nonce. Delegated from
+  // the document so it keeps working across every swap.
   function escapeHtml(s) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
@@ -377,7 +525,6 @@
   }
 
   document.addEventListener("click", (e) => {
-    // Handle JSON copy button
     const copyBtn = e.target.closest(".copy-json-btn");
     if (copyBtn) {
       const pre = copyBtn.closest("#view-json").querySelector(".raw-json");
@@ -385,12 +532,46 @@
         navigator.clipboard.writeText(pre.innerText);
         const orig = copyBtn.innerHTML;
         copyBtn.classList.add("copied");
-        copyBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
+        copyBtn.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!';
         setTimeout(() => {
           copyBtn.innerHTML = orig;
           copyBtn.classList.remove("copied");
         }, 2000);
       }
+      return;
+    }
+
+    const loadBtn = e.target.closest(".sk-load-inputs-btn");
+    if (loadBtn) {
+      e.stopPropagation();
+      e.preventDefault();
+      const ddl = loadBtn.dataset.ddl || "";
+      const v1 = loadBtn.dataset.v1 || "";
+      const v2 = loadBtn.dataset.v2 || "";
+
+      document.querySelectorAll(".segmented-control").forEach((seg) => {
+        const textRadio = seg.querySelector('input[value="text"]');
+        if (textRadio) {
+          textRadio.checked = true;
+          textRadio.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+
+      const taSchema = document.querySelector('[name="schema_text"]');
+      const taV1 = document.querySelector('[name="query_v1_text"]');
+      const taV2 = document.querySelector('[name="query_v2_text"]');
+
+      if (taSchema && ddl) taSchema.value = ddl;
+      if (taV1 && v1) taV1.value = v1;
+      if (taV2 && v2) taV2.value = v2;
+
+      syncGutters();
+
+      document.querySelectorAll(".sk-pane").forEach((pane) => {
+        pane.classList.add("is-flashed");
+        setTimeout(() => pane.classList.remove("is-flashed"), 700);
+      });
       return;
     }
 
@@ -401,7 +582,8 @@
     const json = document.getElementById("view-json");
     if (plain) plain.style.display = view === "plain" ? "block" : "none";
     if (json) json.style.display = view === "json" ? "block" : "none";
-    btn.closest(".view-toggle")
+    btn
+      .closest(".view-toggle")
       .querySelectorAll(".toggle-btn")
       .forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
@@ -415,8 +597,46 @@
     }
   });
 
-  document.getElementById("toggle-sidebar-btn").addEventListener("click", () => {
-    document.getElementById("left-panel").classList.toggle("collapsed");
-  });
+  // ── Advanced settings ─────────────────────────────────────────────────────
+  // Keep the collapsed summary and the status bar honest about what will
+  // actually be sent. The panel is closed by default, so without this a
+  // non-default bound would be invisible at submit time — exactly the confusion
+  // the panel exists to prevent.
+  (function initAdvancedSettings() {
+    const panel = document.getElementById("advanced-settings");
+    const boundSel = document.getElementById("bound-select");
+    const timeoutSel = document.getElementById("timeout-select");
+    const summary = document.getElementById("advanced-summary-value");
+    const hint = document.getElementById("bound-timeout-hint");
+    const statusRight = document.getElementById("status-right");
+    const dialectSel = document.getElementById("dialect-select");
+    const chromeDialect = document.getElementById("chrome-dialect");
+    if (!panel || !boundSel || !timeoutSel) return;
+
+    const defaultBound = Number(panel.dataset.defaultBound);
+    const defaultTimeout = Number(panel.dataset.defaultTimeout);
+
+    function sync() {
+      const bound = Number(boundSel.value);
+      const timeoutMs = Number(timeoutSel.value);
+      const label = `bound ${bound} · ${timeoutMs / 1000}s`;
+      summary.textContent = label;
+      statusRight.textContent = label;
+      summary.classList.toggle(
+        "is-modified",
+        bound !== defaultBound || timeoutMs !== defaultTimeout
+      );
+      // Flag only the combination that actually misleads: a raised bound left
+      // on the short default budget, which tends to come back `unknown`.
+      hint.hidden = !(bound > defaultBound && timeoutMs <= defaultTimeout);
+    }
+
+    boundSel.addEventListener("change", sync);
+    timeoutSel.addEventListener("change", sync);
+    dialectSel.addEventListener("change", () => {
+      chromeDialect.textContent = dialectSel.value + " · utf-8 · lf";
+    });
+    sync();
+  })();
 </script>
 {% endblock %}
