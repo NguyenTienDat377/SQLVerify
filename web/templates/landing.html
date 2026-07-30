@@ -70,7 +70,10 @@
     <link rel="preload" href="/static/fonts/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
 
     <!-- CSS -->
-    <link rel="stylesheet" href="/static/css/styles.css?v=1.1" />
+    <!-- Was a hand-written ?v=1.1, which is the same trap one step removed: it
+         only busts the cache if someone remembers to bump it. Content hash —
+         see the note in base.html for the `is defined` guard. -->
+    <link rel="stylesheet" href="/static/css/styles.css{% if static_v is defined %}?v={{ static_v('css/styles.css') }}{% endif %}" />
 
     <!-- HTMX (magic-link form) -->
     <script

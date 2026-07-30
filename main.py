@@ -11,11 +11,13 @@ Deploy on Render:
     Render detects uvicorn from the start command automatically.
 """
 
+import hashlib
 import os
 import secrets
 import time
 import types
 import typing
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -205,6 +207,32 @@ def _csp_header(nonce: str) -> str:
 # (request.url.scheme reflects X-Forwarded-Proto thanks to uvicorn
 # --forwarded-allow-ips), so local http dev is untouched and we never pin a
 # browser to HTTPS for a host that can't serve it.
+# ── Static asset fingerprinting ──────────────────────────────────────────────
+# The HTML is dynamic (never cached) but /static is cached hard at the edge —
+# Cloudflare was observed serving styles.css with `age: 5005` under
+# `max-age=14400`. A deploy therefore hands a browser NEW markup with FOUR-hour
+# OLD CSS, and the two disagree: the workspace grid gained a resizer column, the
+# stale sheet still declared three, so the results panel wrapped onto row 2 and
+# rendered 250px wide. Nothing was wrong with either file on its own.
+#
+# Appending a content hash makes the URL change whenever the bytes change, which
+# is a different cache key — the edge is forced to fetch from origin on the next
+# deploy instead of serving a copy that no longer matches the HTML referencing
+# it. Hashed once at import: these files can't change under a running process.
+def _asset_version(rel_path: str) -> str:
+    """Short content hash for a file under web/static, for cache busting."""
+    try:
+        data = (Path("web/static") / rel_path).read_bytes()
+    except OSError:
+        # Never let a missing asset take the app down — an unversioned URL is
+        # degraded caching, not an outage.
+        return "0"
+    return hashlib.sha256(data).hexdigest()[:8]
+
+
+_ASSET_VERSIONS = {"css/styles.css": _asset_version("css/styles.css")}
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     # Fresh per-request nonce, stashed on request.state BEFORE the handler runs
@@ -218,6 +246,16 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Content-Security-Policy", _csp_header(nonce))
+    # Stylesheets must revalidate. styles.css is fingerprinted (see
+    # _asset_version) so its URL changes on every edit, but the token sheets it
+    # @imports are named inside the CSS text and can never carry that query —
+    # a colour change there would otherwise sit stale behind the edge cache for
+    # the full max-age. They are a few KB each, so a revalidation 304 is far
+    # cheaper than shipping a palette that disagrees with the markup.
+    # Fonts and images are deliberately left on the long cache: they're large,
+    # and they change by filename rather than in place.
+    if request.url.path.startswith("/static/css/"):
+        response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
     if request.url.scheme == "https":
         response.headers.setdefault(
             "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
@@ -301,6 +339,8 @@ async def shutdown():
 
 _SITE_URL = os.getenv("SITE_URL", "https://skolem.dev").rstrip("/")
 templates.env.globals["site_url"] = _SITE_URL
+# {{ static_v('css/styles.css') }} → an 8-char content hash. See _asset_version.
+templates.env.globals["static_v"] = lambda p: _ASSET_VERSIONS.get(p) or _asset_version(p)
 
 
 @app.get("/robots.txt", include_in_schema=False)

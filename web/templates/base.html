@@ -44,8 +44,16 @@
     <link rel="preload" href="/static/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/static/fonts/JetBrainsMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
 
-    <!-- CSS -->
-    <link rel="stylesheet" href="/static/css/styles.css" />
+    <!-- CSS. The ?v= is a content hash, not a hand-bumped number: the HTML is
+         never cached but /static is cached hard at the edge, so without it a
+         deploy serves new markup against a stale stylesheet.
+         The `is defined` guard is not paranoia — every full page extends this
+         template, including 500.html, and only main.py's Jinja environment
+         registers static_v (api/*.py each build their own for partials). If a
+         page were ever rendered from one of those, an unguarded call would
+         raise while rendering the error page for the error. Degrade to an
+         unversioned URL instead: stale CSS beats a white screen. -->
+    <link rel="stylesheet" href="/static/css/styles.css{% if static_v is defined %}?v={{ static_v('css/styles.css') }}{% endif %}" />
 
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="/static/img/favicon.png" />
