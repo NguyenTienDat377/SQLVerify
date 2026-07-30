@@ -3061,7 +3061,7 @@ button.sk-tab:focus-visible {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: 250px var(--editor-width, minmax(0, 1fr)) 5px minmax(0, 1.05fr);
+  grid-template-columns: 250px var(--editor-width, 1fr) 5px minmax(320px, 1fr);
 }
 
 /* Each column scrolls independently — the IDE feel depends on the run bar and
@@ -3089,7 +3089,7 @@ button.sk-tab:focus-visible {
 
 /* Collapse columns so nothing bleeds through. */
 .sk-ws:has(.sk-ws-side.collapsed) {
-  grid-template-columns: 0 var(--editor-width, minmax(0, 1fr)) 5px minmax(0, 1.05fr);
+  grid-template-columns: 0 var(--editor-width, 1fr) 5px minmax(320px, 1fr);
 }
 
 .sk-ws:has(.sk-ws-editor.collapsed) {
@@ -3711,12 +3711,14 @@ body.is-resizing textarea {
    editor rather than being squeezed into an unreadable strip. */
 @media (max-width: 1100px) {
   .sk-ws { grid-template-columns: 220px minmax(0, 1fr); }
+  .sk-resizer { display: none !important; }
   .sk-ws-results { grid-column: 2; border-top: 1px solid var(--panel-border); }
   .sk-ws-editor { border-right: 0; }
 }
 
 @media (max-width: 720px) {
   .sk-ws { grid-template-columns: minmax(0, 1fr); }
+  .sk-resizer { display: none !important; }
   .sk-ws-side { display: none; }
   .sk-ws-results { grid-column: 1; }
   .sk-run-controls { grid-template-columns: 1fr; }

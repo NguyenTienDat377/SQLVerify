@@ -650,9 +650,31 @@
     const sidebar = document.getElementById("left-panel");
     if (!resizer || !container || !editor) return;
 
-    const savedWidth = localStorage.getItem("skolem_editor_width");
-    if (savedWidth) {
-      container.style.setProperty("--editor-width", savedWidth + "px");
+    function clampWidth(targetWidth) {
+      const containerWidth = container.getBoundingClientRect().width;
+      if (!containerWidth || containerWidth <= 1100) return null;
+
+      const sideWidth = sidebar && !sidebar.classList.contains("collapsed")
+        ? sidebar.getBoundingClientRect().width
+        : 0;
+
+      const minEditorWidth = 250;
+      const minResultsWidth = 320;
+      const resizerWidth = 5;
+
+      const maxEditorWidth = Math.max(
+        minEditorWidth,
+        containerWidth - sideWidth - minResultsWidth - resizerWidth
+      );
+
+      const clamped = Math.max(minEditorWidth, Math.min(targetWidth, maxEditorWidth));
+      container.style.setProperty("--editor-width", clamped + "px");
+      return clamped;
+    }
+
+    const savedWidth = parseFloat(localStorage.getItem("skolem_editor_width"));
+    if (!isNaN(savedWidth) && savedWidth > 0) {
+      clampWidth(savedWidth);
     }
 
     let isDragging = false;
@@ -674,19 +696,16 @@
         ? sidebar.getBoundingClientRect().width
         : 0;
 
-      let editorWidth = clientX - containerRect.left - sideWidth;
-
-      const minEditorWidth = 200;
-      const maxEditorWidth = containerRect.width - sideWidth - 250;
-
-      editorWidth = Math.max(minEditorWidth, Math.min(editorWidth, maxEditorWidth));
+      let rawWidth = clientX - containerRect.left - sideWidth;
+      const clamped = clampWidth(rawWidth);
 
       if (editor.classList.contains("collapsed")) {
         editor.classList.remove("collapsed");
       }
 
-      container.style.setProperty("--editor-width", editorWidth + "px");
-      localStorage.setItem("skolem_editor_width", editorWidth);
+      if (clamped !== null) {
+        localStorage.setItem("skolem_editor_width", clamped);
+      }
     }
 
     function onPointerUp() {
@@ -709,6 +728,13 @@
 
     window.addEventListener("mouseup", onPointerUp);
     window.addEventListener("touchend", onPointerUp);
+
+    window.addEventListener("resize", () => {
+      const currentWidth = parseFloat(container.style.getPropertyValue("--editor-width"));
+      if (!isNaN(currentWidth) && currentWidth > 0) {
+        clampWidth(currentWidth);
+      }
+    });
   })();
 </script>
 {% endblock %}
