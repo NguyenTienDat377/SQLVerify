@@ -2190,6 +2190,14 @@ h1, h2, h3, h4 {
 
 .sk-nav-links a:hover { color: var(--text-primary); }
 
+/* Current page in the shared marketing nav. The three public pages now share
+   one header, so without this you can't tell /pricing from /integrations. */
+.sk-nav-links a.is-current {
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--accent-color);
+  padding-bottom: 2px;
+}
+
 .sk-ghost-link {
   display: inline-flex;
   align-items: center;
@@ -2664,6 +2672,18 @@ h1, h2, h3, h4 {
    The design is a desktop two-pane composition; below 1024px the hero stacks
    (console under the copy) and the dense grids halve rather than shrink their
    type, so the mono surfaces stay readable. */
+/* The marketing nav carries seven items. Rather than let them wrap to a second
+   row (or hide a whole navigation early), tighten the gap as space runs out —
+   they stay on one line down to the 1024px breakpoint where they hide anyway. */
+@media (max-width: 1200px) {
+  .sk-nav-links { gap: var(--space-4); }
+}
+
+@media (max-width: 1100px) {
+  .sk-nav-links { gap: var(--space-3); }
+  .sk-nav { padding-left: var(--space-4); padding-right: var(--space-4); }
+}
+
 @media (max-width: 1024px) {
   .sk-hero { grid-template-columns: 1fr; gap: var(--space-8); padding-top: var(--space-12); }
   .sk-cx { grid-template-columns: 1fr; gap: var(--space-8); }
@@ -2678,6 +2698,7 @@ h1, h2, h3, h4 {
 
 @media (max-width: 640px) {
   .sk-strip { font-size: 0.625rem; gap: var(--space-2); }
+  .sk-strip-wide { display: none; }
   .sk-strip-right { display: none; }
   .sk-console-panes { grid-template-columns: 1fr; }
   .sk-pane-left { border-right: none; border-bottom: 1px solid var(--panel-border); }
@@ -3750,7 +3771,11 @@ body.is-resizing textarea {
 .sk-docs-nav {
   align-self: start;
   position: sticky;
-  top: 3.5rem;
+  /* Clears the sticky marketing nav (.sk-nav is 74px tall and also sticky at
+     top:0). The old 3.5rem was measured against the shorter app topbar this
+     page used before it joined the shared header, and left the rail sliding
+     18px underneath on scroll. */
+  top: 5rem;
   padding: var(--space-6) var(--space-4);
   border-right: 1px solid var(--panel-border);
 }

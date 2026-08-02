@@ -476,6 +476,8 @@ async def pricing_page(request: Request):
         name="pricing.html",
         context={
             "user_email": user_email,
+            # z3_version feeds the shared marketing header's status strip.
+            "z3_version": _Z3_VERSION,
             "free_tier_limit": FREE_TIER_MONTHLY_LIMIT,
             "default_bound": DEFAULT_BOUND,
             "max_bound": MAX_BOUND,
@@ -619,7 +621,13 @@ async def integrations_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="integrations.html",
-        context={"user_email": user_email},
+        # z3_version/max_bound feed the shared marketing header's status strip,
+        # which this page now renders instead of the app topbar.
+        context={
+            "user_email": user_email,
+            "z3_version": _Z3_VERSION,
+            "max_bound": MAX_BOUND,
+        },
     )
 
 

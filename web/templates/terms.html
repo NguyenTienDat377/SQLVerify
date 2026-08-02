@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Terms of Service — Skolem{% endblock %}
+{# Public page — shares the marketing header so the chrome doesn't change
+   when a visitor arrives here from the landing footer. #}
+{% block topbar %}{% include 'partials/marketing_header.html' %}{% endblock %}
+
 {% block content %}
 <style>
   .legal-page { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem 4rem; line-height: 1.7; }

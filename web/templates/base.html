@@ -68,6 +68,10 @@
   <body>
     <div class="app-container">
       <!-- Topbar -->
+      {# Public marketing pages (landing/pricing/integrations) override this
+         with partials/marketing_header.html so they share the landing page's
+         status strip + mono nav. Everything else keeps the app topbar. #}
+      {% block topbar %}
       <header class="topbar">
         <a href="/" class="topbar-logo" aria-label="Skolem home">
           <span class="topbar-logo-icon">
@@ -125,6 +129,7 @@
           {% endif %}
         </nav>
       </header>
+      {% endblock %}
 
       <!-- Main Content -->
       <main class="main-content">{% block content %}{% endblock %}</main>

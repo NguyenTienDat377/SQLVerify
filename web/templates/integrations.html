@@ -4,6 +4,14 @@
 
 {% block description %}Bring Skolem's formal SQL verification into your terminal, CI/CD pipeline, or AI coding agent — CLI for GitHub Actions and GitLab CI, MCP server for Claude Code, Claude Desktop, and Cursor.{% endblock %}
 
+{# Same shared header as landing and pricing. The exit-code contract keeps the
+   right-hand slot of the strip — it's the most useful thing a CI reader can see
+   before scrolling, and it replaced the page's own duplicate strip below. #}
+{% block topbar %}
+  {% set strip_note = 'exit 0 = gate passed · 1 = gate failed · 2 = the CLI failed' %}
+  {% include 'partials/marketing_header.html' %}
+{% endblock %}
+
 {% block content %}
 
 <!-- Public CI/CD + integrations page. Shell ported from CI.dc.html; its content
@@ -14,18 +22,6 @@
      See CLAUDE.md § integrations.html before editing. -->
 
 <div class="sk-page">
-
-  <!-- Status strip -->
-  <div class="sk-strip">
-    <div class="sk-strip-group">
-      <span class="sk-strip-live"><span class="sk-dot"></span>solver online</span>
-      <span>no database credentials in CI</span>
-      <span>DDL + SQL text only</span>
-    </div>
-    <div class="sk-strip-group sk-strip-right">
-      <span>exit 0 = gate passed · 1 = gate failed · 2 = the CLI failed</span>
-    </div>
-  </div>
 
   <header class="sk-pr-head">
     <div class="sk-kicker">CI/CD integration</div>

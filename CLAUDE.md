@@ -149,6 +149,8 @@ Skolem/
         └── partials/
             ├── result.html         # ✅ DONE — equivalent/divergent/error/unknown badges + counterexample + Explain
             ├── history.html        # ✅ DONE — list of past runs, click to replay
+            ├── marketing_header.html # ✅ DONE — status strip + mono nav shared by
+            │                        #   landing / pricing / integrations (one identity)
             ├── api_keys.html        # ✅ DONE — API key list + show-once raw key banner
             ├── projects.html        # ✅ DONE — project list + delete + inline error/empty states
             └── upgrade_prompt.html # ✅ DONE — 402 free-tier upgrade prompt (HTMX)
@@ -262,6 +264,21 @@ Skolem/
   - **Deliberately NOT ported** (no data behind them): the `trace` and `smt2` tabs (no stage timings are emitted; `Solver.sexpr()` is never called), the pair hash / assertion count / `elapsed_ms`, the `412 / 500 proofs` quota chip, "cached pairs are free" (there is no result cache), "Attach proof to PR" / "Queue background proof" (unbuilt), and the eq/div/unk/err **outcome picker**, which is a mockup preview device. Also rejected: the mockup's bare ± bound stepper — see the decision table; the bound ships with its explanation or not at all.
   - **Fixed in passing:** `#schema-summary-panel` used to live *inside* `#result-panel`, so the first verification swapped it away and every later schema edit had no target left — the panel silently stopped updating. It now sits beside the schema pane, which is also where it belongs.
   - **Advanced settings** — a collapsed `<details>` panel inside the form exposing `bound` (1…`MAX_BOUND`) and `timeout_ms`, each with the prose that makes the number meaningful. Options are generated from server-supplied limits (`default_bound`/`max_bound`/`default_timeout_ms`/`max_timeout_ms`, passed by `verify_page()` in `main.py`), so the form can never offer a value the endpoint would 422 on. The collapsed summary shows the live `bound N · Ts` and highlights when either is non-default (a hidden non-default bound would silently change the strength of a proof); a warning appears for a raised bound left on the default timeout. `partials/result.html` echoes the bound on an `equivalent` verdict when the caller supplies it — the live run does, history replay does not (the stored run has no bound column, and a guessed one would misstate the proof).
+- **Shared public header** — `partials/marketing_header.html` (status strip + mono nav) is
+  rendered by **every public page** — `landing`, `pricing`, `docs`, `integrations`, `terms`,
+  `privacy` — each overriding base.html's `{% block topbar %}` (landing includes it directly,
+  since it doesn't extend base). Signed-in app pages and the error pages keep the app topbar,
+  which is the rule: **public = marketing header, app = topbar.**
+  Before this, only landing had it, so following `/pricing` from the landing nav swapped the
+  whole header and read like a different site. The partial is deliberately tolerant of missing
+  context (`z3_version`, `max_bound` are omitted rather than rendered empty) because not every
+  route injects them, and section anchors resolve to `#proof` on landing but `/#proof`
+  elsewhere. A page may pass `strip_note` to own the strip's right-hand slot — `/integrations`
+  states the exit-code contract there. **Edit the nav in the partial, never in a page.**
+  Two knock-ons worth keeping: the nav carries seven items, so `.sk-nav-links` tightens its
+  gap at 1200px/1100px to stay on one line until it hides at 1024px; and `.sk-docs-nav`'s
+  sticky `top` is 5rem, not 3.5rem, to clear the taller sticky nav (`/docs` used to sit
+  under the shorter app topbar and the rail slid 18px beneath it on scroll).
 - `pricing.html` — ported from the same redesign project's `Pricing.dc.html`. Header → three plan cards → **limits matrix** → sizing calculator → FAQ → CTA; CTAs point at `/billing/checkout?plan=…`. **The same no-overclaiming rule as `landing.html` applies, and it bites harder here — a wrong number on a pricing page is a billing dispute.** The mockup gated `bound`, solver timeout, history retention and API-token count by tier; the engine gates **none** of those (`_enforce_quota` only lifts the monthly run cap for a paid tier), so the matrix says "same on every plan" and the page turns that into the pitch: *a cheaper plan never buys you a weaker proof*. Also dropped as unbacked: the monthly/annual toggle (there is no annual Lemon Squeezy variant, so its price had no checkout behind it), "UNKNOWN results are not billed" (`count_runs_this_month` counts every row), "re-running an unchanged pair is cached and free" (no result cache — see the scaling roadmap), free-Team-for-OSS, SSO, shared projects and priority queue. Team's GitHub Action is marked **in development**, not sold. Every number (`free_tier_limit`, `max_bound`, both timeout pairs) is injected by `pricing_page()` in `main.py` from `api/verify.py`'s constants — `FREE_TIER_MONTHLY_LIMIT` is env-tunable, so a hardcoded "100" would start lying the first time it changes on Render. **Known gap:** nothing in the code distinguishes Individual from Team — both are just `PAID_TIERS` — so their difference on the page is support and roadmap only. Implement per-tier metering before claiming more.
 - **Superseded CSS** — `.pricing-grid`/`.pricing-card`/`.pricing-tier`/`.pricing-price`/`.pricing-period`/`.pricing-features`/`.pricing-feature`/`.popular-badge`, the whole `.landing-*`/`.hero`/`.features` block, and now `.panel`/`.panel-left`/`.panel-right`/`.tabs` (the old two-panel workspace) are all dead and can be deleted. **Do not delete `.pricing-header`/`.pricing-title`/`.pricing-subtitle`** — `404.html` and `500.html` reuse them.
 - **Class-name collisions are a real hazard** in this single stylesheet: the workspace's submit button was first called `.sk-run-btn`, which the landing page's proof-console button already owned, and the landing's small outlined style silently flattened the primary CTA. It is `.sk-ws-run` now. Grep before naming a new `sk-` class.

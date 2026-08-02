@@ -4,6 +4,11 @@
 
 {% block description %}Skolem API documentation: prove two SQL queries are semantically equivalent with Z3/SMT formal verification, or get a concrete counterexample database where they diverge. REST API, CLI, and MCP server for AI agents.{% endblock %}
 
+{# /docs is now in the shared marketing nav, so it gets the shared header too —
+   linking to a page that swaps the whole chrome is the thing that header exists
+   to prevent. #}
+{% block topbar %}{% include 'partials/marketing_header.html' %}{% endblock %}
+
 {% block content %}
 
 <!-- Public docs. Shell ported from Docs.dc.html; the request/response tables are

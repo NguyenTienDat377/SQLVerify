@@ -1,5 +1,9 @@
 {% extends "base.html" %} {% block title %}Pricing — Skolem{% endblock %}
 {% block description %}Skolem pricing: every plan runs the same Z3 engine at the same bound and timeout limits. Free includes {{ free_tier_limit }} verification runs per month.{% endblock %}
+{# Share the landing page's status strip + mono nav instead of the app topbar,
+   so following /pricing from the landing nav doesn't swap the whole header. #}
+{% block topbar %}{% include 'partials/marketing_header.html' %}{% endblock %}
+
 {% block content %}
 
 <!-- Pricing page. Ported from the "Skolem landing page redesign" Claude Design
