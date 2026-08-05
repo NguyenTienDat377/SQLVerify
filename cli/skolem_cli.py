@@ -207,10 +207,35 @@ def _rows_table(rows, indent="    "):
     return "\n".join(out)
 
 
-def render_human(resp, failed):
+def _effective_fail_on(local_fail_on, resp):
+    """Union the caller's --fail-on with the org's server-side policy
+    (resp['policy_fail_on']), if the run was tagged to an org-scoped project.
+    The server value can only ADD strictness, never remove it — a developer's
+    own flag can't weaken an org's required gate (CLAUDE.md Team-tier
+    decision table, item #5: "a gate a member could weaken on their own
+    project isn't a gate"). Returns (effective_fail_on, note) — note is a
+    human-readable string when the org policy is what actually failed this
+    run (i.e. --fail-on alone would have let it pass), else None.
+    """
+    server_raw = resp.get("policy_fail_on")
+    if not server_raw:
+        return local_fail_on, None
+    server_fail_on = {s.strip().lower() for s in server_raw.split(",") if s.strip()}
+    effective = local_fail_on | server_fail_on
+    status = resp.get("status", "error")
+    note = None
+    if status in server_fail_on and status not in local_fail_on:
+        note = (f"org policy requires failing on '{status}' for this project "
+                "— your own --fail-on alone would have passed it")
+    return effective, note
+
+
+def render_human(resp, failed, policy_note=None):
     status = resp.get("status", "error")
     mark = "x" if failed else ("ok" if status == "equivalent" else "!")
     lines = [f"[{mark}] {_BADGES.get(status, status)}"]
+    if policy_note:
+        lines.append(f"    [org policy] {policy_note}")
 
     if status == "equivalent":
         lines.append("    The two queries return the same result on every database "
@@ -253,7 +278,7 @@ def _gh_escape(text):
                 .replace("\n", "%0A").replace("::", "%3A%3A"))
 
 
-def render_github(resp, failed, file_hint):
+def render_github(resp, failed, file_hint, policy_note=None):
     """A GitHub Actions annotation. Level follows the gate policy, so a status
     the caller chose not to fail on cannot paint the check red."""
     status = resp.get("status", "error")
@@ -265,6 +290,8 @@ def render_github(resp, failed, file_hint):
             parts.append(resp[key])
     if status == "unknown":
         parts.append("Solver timed out — this is not a proof of equivalence.")
+    if policy_note:
+        parts.append(f"[org policy] {policy_note}")
 
     loc = f" file={file_hint}" if file_hint and file_hint != "-" else ""
     return f"::{level}{loc}::{_gh_escape(' — '.join(parts))}"
@@ -301,7 +328,8 @@ def cmd_verify(args):
     resp = post_verify(url, api_key, payload)
 
     status = resp.get("status", "error")
-    failed = status in fail_on
+    effective_fail_on, policy_note = _effective_fail_on(fail_on, resp)
+    failed = status in effective_fail_on
 
     output = args.output
     if output == "auto":
@@ -310,9 +338,9 @@ def cmd_verify(args):
     if output == "json":
         print(json.dumps(resp))
     elif output == "github":
-        print(render_github(resp, failed, args.v2))
+        print(render_github(resp, failed, args.v2, policy_note))
     else:
-        print(render_human(resp, failed))
+        print(render_human(resp, failed, policy_note))
 
     return EXIT_FAIL if failed else EXIT_PASS
 
@@ -543,15 +571,16 @@ def cmd_diff(args):
             continue
 
         status = resp.get("status", "error")
-        failed = status in fail_on
+        effective_fail_on, policy_note = _effective_fail_on(fail_on, resp)
+        failed = status in effective_fail_on
 
         if output == "json":
             print(json.dumps({**resp, "path": path}))
         elif output == "github":
-            print(render_github(resp, failed, path))
+            print(render_github(resp, failed, path, policy_note))
         else:
             print(f"--- {path} ---")
-            print(render_human(resp, failed))
+            print(render_human(resp, failed, policy_note))
 
         if worst != EXIT_CLI_ERROR:
             worst = max(worst, EXIT_FAIL if failed else EXIT_PASS)

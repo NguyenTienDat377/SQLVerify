@@ -14,6 +14,9 @@
     <li class="sk-list-row">
         <div class="sk-list-content">
             <span class="sk-list-name">{{ p.name }}</span>
+            {% if p.org_id %}
+            <span class="sk-badge sk-badge--info">shared</span>
+            {% endif %}
             {% if p.description %}
             <span class="sk-list-meta">{{ p.description }}</span>
             {% endif %}

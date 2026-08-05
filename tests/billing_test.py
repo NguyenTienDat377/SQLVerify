@@ -100,10 +100,29 @@ def test_at_limit_htmx_returns_402_partial():
     assert "free tier" in r.text.lower()
 
 
-def test_active_paid_plan_bypasses_limit():
-    _stub_quota(used=10_000, sub={"tier": "individual", "status": "active"})
+def test_team_plan_bypasses_limit_entirely():
+    # Only Team is truly unlimited — see CLAUDE.md's Team-tier decision table,
+    # item #1 (Individual is capped so the volume lever isn't given away at $9).
+    _stub_quota(used=10_000, sub={"tier": "team", "status": "active"})
     r = _vclient.post("/api/verify/text", json=_VERIFY_BODY)
     assert r.status_code == 200, r.text
+
+
+def test_individual_plan_allows_under_its_cap():
+    _stub_quota(used=verify_mod.INDIVIDUAL_TIER_MONTHLY_LIMIT - 1,
+                sub={"tier": "individual", "status": "active"})
+    r = _vclient.post("/api/verify/text", json=_VERIFY_BODY)
+    assert r.status_code == 200, r.text
+
+
+def test_individual_plan_capped_at_its_limit():
+    _stub_quota(used=verify_mod.INDIVIDUAL_TIER_MONTHLY_LIMIT,
+                sub={"tier": "individual", "status": "active"})
+    r = _vclient.post("/api/verify/text", json=_VERIFY_BODY)
+    assert r.status_code == 402, r.text
+    body = r.json()
+    assert body["error"] == "quota_exceeded"
+    assert body["limit"] == verify_mod.INDIVIDUAL_TIER_MONTHLY_LIMIT
 
 
 def test_quota_fails_open_on_error():

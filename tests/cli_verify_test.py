@@ -227,6 +227,57 @@ def test_fail_on_equivalent_is_rejected():
     assert "cannot be a failure" in err, err
 
 
+# ── Server-side org policy (fail_on can be widened, never narrowed) ─────────
+
+def test_org_policy_widens_fail_on_beyond_local_flag():
+    # Local --fail-on is left at its default (divergent only). The server
+    # attaches policy_fail_on=unknown for this org-scoped project. A plain
+    # --fail-on can never remove that requirement, so 'unknown' still fails.
+    global _next_response
+    _reset()
+    _next_response = {"status": "unknown", "policy_fail_on": "unknown"}
+    with tempfile.TemporaryDirectory() as tmp:
+        code, _, _ = _run(_argv(_files(tmp), "--output", "json"))
+    assert code == cli.EXIT_FAIL, f"org policy must widen the gate, got {code}"
+
+
+def test_org_policy_cannot_narrow_local_fail_on():
+    # Local --fail-on asks for divergent,unknown,error; the org's own policy
+    # is narrower (divergent only). The union must still hold — the server
+    # value only ever ADDS strictness, it never overrides the caller's own
+    # (stricter) ask down to something weaker.
+    global _next_response
+    _reset()
+    _next_response = {"status": "unknown", "policy_fail_on": "divergent"}
+    with tempfile.TemporaryDirectory() as tmp:
+        code, _, _ = _run(_argv(_files(tmp), "--fail-on", "divergent,unknown,error",
+                                 "--output", "json"))
+    assert code == cli.EXIT_FAIL, f"local --fail-on must not be narrowed by org policy, got {code}"
+
+
+def test_org_policy_note_appears_in_human_and_github_output():
+    global _next_response
+    _reset()
+    _next_response = {"status": "unknown", "policy_fail_on": "unknown"}
+    with tempfile.TemporaryDirectory() as tmp:
+        _, out, _ = _run(_argv(_files(tmp), "--output", "human"))
+        _, gh_out, _ = _run(_argv(_files(tmp), "--output", "github"))
+    assert "org policy" in out, out
+    assert "org policy" in gh_out, gh_out
+
+
+def test_no_policy_field_behaves_as_before():
+    # Regression guard: a response with no policy_fail_on key (the common
+    # case — most runs aren't tagged to an org-scoped project) must gate
+    # purely on the local --fail-on, unchanged from before this feature.
+    global _next_response
+    _reset()
+    _next_response = {"status": "unknown"}
+    with tempfile.TemporaryDirectory() as tmp:
+        code, _, _ = _run(_argv(_files(tmp), "--output", "json"))
+    assert code == cli.EXIT_PASS, f"unknown must still pass by default, got {code}"
+
+
 def test_missing_file_is_cli_error():
     _reset()
     with tempfile.TemporaryDirectory() as tmp:

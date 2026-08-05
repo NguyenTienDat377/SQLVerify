@@ -13,7 +13,7 @@ Or point the MCP client's command at this file (see README.md).
 import os
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # Where the hosted Skolem lives. Override for local dev (http://localhost:8000).
 BASE_URL = os.environ.get("SKOLEM_URL", "https://skolem.dev").rstrip("/")
@@ -32,7 +32,7 @@ _HTTP_TIMEOUT_S = 130.0
 _VERSION = "0.1.0"
 _USER_AGENT = f"skolem-mcp/{_VERSION}"
 
-mcp = FastMCP("skolem")
+mcp = MCPServer("skolem")
 
 
 @mcp.tool()
@@ -60,20 +60,41 @@ async def verify_sql_equivalence(
       - query_v1_output / query_v2_output: each query's result on that database.
       - error_message: populated only when status is "error".
 
-    Supported SQL subset (anything outside is rejected as status "error", never
-    silently ignored): single SELECT; any number of INNER joins OR exactly one
-    LEFT/RIGHT join; JOIN ON must be a single column equality; WHERE/HAVING are
-    AND-chains of comparisons and IS [NOT] NULL (no OR/IN/BETWEEN/LIKE);
-    GROUP BY / aggregates supported. No CTEs, window functions, subqueries,
-    UNION, DISTINCT, SELECT *, or LIMIT.
+    Supported SQL subset — anything outside it is rejected as status "error",
+    never silently ignored (a dropped clause could turn a real divergence into a
+    false "equivalent"):
+      - A single SELECT over plain tables. SELECT list: plain columns, SUM(col),
+        COUNT(*), COUNT(col), COALESCE(aggregate, literal).
+      - JOINs: any chain mixing INNER / LEFT / RIGHT / FULL, each ON a single
+        column equality. No CROSS joins and no self-joins.
+      - WHERE / HAVING: full AND / OR / NOT trees over comparisons (column vs
+        literal and column vs column), IS [NOT] NULL, and IN (value-list), all
+        under three-valued (NULL-aware) logic.
+      - WHERE also supports `col IN (SELECT ...)` for an uncorrelated,
+        single-column subquery.
+      - GROUP BY on plain columns from any joined table; HAVING on aggregate
+        comparisons.
+      - Non-recursive CTEs (WITH); a CTE body may itself join/group/aggregate.
+      - ORDER BY is accepted but ignored (equivalence is under bag semantics).
+
+    Rejected (status "error"): window functions, UNION, SELECT DISTINCT,
+    SELECT *, LIMIT / OFFSET, BETWEEN, LIKE, scalar subqueries, EXISTS, derived
+    tables in FROM, IN (SELECT ...) in HAVING, WITH RECURSIVE, a CTE body
+    referencing another CTE, a CTE combined with an outer join, ordering
+    comparisons (< >) on TEXT/TIMESTAMP columns, and boolean literals in
+    predicates (e.g. `WHERE active = TRUE`).
 
     Args:
-        ddl_sql: Flyway-style CREATE TABLE DDL defining the schema.
+        ddl_sql: Flyway-style CREATE TABLE DDL defining the schema. ALTER TABLE
+                 statements are folded in, so a concatenated migrations
+                 directory works.
         sql_v1:  The original / trusted SQL SELECT query.
         sql_v2:  The rewritten (e.g. AI-generated) query to check against v1.
-        bound:   Max rows per table Z3 explores (default 3). An "equivalent"
-                 verdict is sound only within this bound; raising it finds rarer
-                 bugs but is slower and may time out (status "unknown").
+        bound:   Max rows per table Z3 explores (default 3, max 6). An
+                 "equivalent" verdict is sound only within this bound; raising it
+                 finds rarer bugs but is slower and may time out (status
+                 "unknown"). Cost grows roughly bound^(number of joined tables),
+                 so raise it only after a run comes back equivalent at 3.
     """
     if not API_KEY:
         return {

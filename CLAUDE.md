@@ -95,7 +95,7 @@ Skolem/
 │   └── README.md                   #   install + flags + exit codes + output modes
 │
 ├── mcp/                            # ✅ DONE — MCP delivery surface (standalone; own .venv, only needs mcp+httpx)
-│   ├── skolem_mcp.py            #   FastMCP stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer skm_ key)
+│   ├── skolem_mcp.py            #   MCPServer stdio server: tool verify_sql_equivalence() → POST /api/verify/text (Bearer skm_ key)
 │   ├── requirements.txt            #   mcp + httpx (NOT the app's deps)
 │   ├── README.md                   #   setup + Claude Code/Desktop connect + Inspector test
 │   └── examples/
@@ -198,6 +198,12 @@ Skolem/
   `/auth/logout` (**POST**, clears cookies).
 - `keys.py` — `/api/keys` create/list + `/api/keys/{id}/revoke` (session-protected, HTMX).
 - `projects.py` — `/api/projects` create/list + `/api/projects/{id}/delete` (session-protected, HTMX); all owner-scoped.
+- `organizations.py` — `/api/organizations` create/list; `/api/organizations/{id}/members`
+  get/add/remove (owner-only, HTMX); `/api/organizations/{id}/policy` set the server-side
+  `--fail-on` policy (owner-only); `GET /api/organizations/{id}/audit.csv` — owner-only CSV
+  export of every run on a project scoped to the org, with CSV-formula-injection escaping
+  (`_csv_safe`) since `divergence_reason`/project name trace back to user-supplied SQL
+  identifiers.
 - `billing.py` — `/billing/checkout?plan=…` (LS buy-link + `user_id` custom data) and
   `/billing/portal` (fresh signed LS portal URL via the LS API).
 - `webhooks.py` — `POST /api/webhooks/lemonsqueezy` (HMAC-verified) → `upsert_subscription`,
@@ -223,7 +229,13 @@ Skolem/
     `1` — a lapsed key must not be mistakable for a broken query.
   - **`--fail-on`** (default `divergent`) is the gate policy: `unknown`/`error` warn loudly
     but pass, because a check that reddens on the first CTE gets uninstalled. `unknown`
-    always prints "not a proof of equivalence", however it's gated.
+    always prints "not a proof of equivalence", however it's gated. When the run is tagged
+    to a project scoped to an org with its own `fail_on_policy` (Migration #7), the server
+    returns `policy_fail_on` in the response and `_effective_fail_on` unions it with the
+    caller's own `--fail-on` — the org's requirement can only widen the gate, never be
+    narrowed by a developer's local flag. A note ("[org policy] ...") is printed on `human`/
+    `github` output whenever the org policy is what actually failed a run the local flag
+    alone would have passed.
   - **`--output`** `auto` (human on a TTY, json when piped) | `human` | `json` (VerifyResponse
     verbatim) | `github` (one annotation; its level follows `--fail-on`, so the check's colour
     can't contradict the exit code).
@@ -248,14 +260,43 @@ Skolem/
 - `pyproject.toml` — `pipx install ./cli` → `skolem`. httpx is the only dependency; the
   CLI must **never** import `core/`, or installing it would drag in Z3.
 
+### action/
+- `action.yml` — packaged GitHub Action wrapping `skolem diff`. **Composite, not
+  Docker** — a Docker action's build context is limited to its own directory, so
+  it can't `COPY ../cli` without duplicating it (drift risk) or publishing a
+  separate container image (real infra this project doesn't have). A composite
+  action runs in the caller's own runner and `pip install`s the sibling `cli/`
+  directly via `${{ github.action_path }}/../cli`, so there is nothing to build
+  or publish — same "thin wrapper, no reimplementation" rule as `cli/` itself.
+  Every input is passed through `env:` and read back as `"$VAR"` inside the
+  `run:` script, never templated directly into the script body — the standard
+  GitHub Actions script-injection guard, since inputs can in principle carry
+  shell metacharacters. Requires the caller to have already run
+  `actions/checkout` with `fetch-depth: 0` (same merge-base requirement as
+  `skolem diff` itself) — the action does not check out the repo.
+- `README.md` — usage snippet, input/output tables, why full clone depth, why
+  composite not Docker.
+- Referenced from `integrations.html`'s "github actions" tab as
+  `NguyenTienDat377/SQLVerify/action@main`; the "bare cli" tab still documents
+  calling `skolem diff` directly for anyone who'd rather not add the dependency.
+
 ### db/
 - `client.py` — Supabase client using the service key (bypasses RLS; repos scope by `user_id` in code)
-- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()` (`save_run`/`get_recent_runs` accept `project_id`)
+- `repositories/verification_runs.py` — `save_run()`, `get_recent_runs()`, `get_run_by_id()`, `update_explanation()`, `count_runs_this_month()` (`save_run`/`get_recent_runs` accept `project_id`), `get_org_audit_rows()` (org audit export — joins through `projects.org_id` via a PostgREST `!inner` embed)
 - `repositories/subscriptions.py` — `upsert_subscription()`, `get_active_subscription()`, `get_active_subscription_by_user()`
 - `repositories/api_keys.py` — `create/list/revoke/resolve` per-user API keys (sha256-hashed, shown once)
-- `repositories/projects.py` — `create/list/get/delete` per-user projects, all scoped by `owner_id` (the `get_project` ownership check also backs run tagging)
-- Supabase tables `verification_runs`, `subscriptions`, `api_keys`, `projects` with RLS enabled
-  (Migrations #1–#4 below; the service key intentionally bypasses RLS for server writes)
+- `repositories/projects.py` — `create/list/get/delete` per-user projects, all scoped by `owner_id`
+  OR by membership in the org a project is `org_id`-scoped to (Migration #6); the `get_project`
+  ownership/access check also backs run tagging and `_can_access_run` in `api/verify.py`
+- `repositories/organizations.py` — `create_organization()`, `list_organizations_for_user()`,
+  `list_org_ids_for_user()`, `get_org_owner_for_member()` (lets a Team subscription cover every
+  seat — see `_enforce_quota` in `api/verify.py`), `add_member_by_email()`/`remove_member()`
+  (owner-only; email→user_id resolution pages through GoTrue's `list_users()`, capped at 20
+  pages since there's no email filter), `get_org_fail_on_policy()`/`set_fail_on_policy()`
+  (Migration #7 — the server-side `--fail-on` policy, owner-only)
+- Supabase tables `verification_runs`, `subscriptions`, `api_keys`, `projects`, `organizations`,
+  `org_members` with RLS enabled (Migrations #1–#7 below; the service key intentionally bypasses
+  RLS for server writes)
 
 ### web/
 - `landing.html` — marketing page, ported from the **"Skolem landing page redesign"** Claude Design project (projectId `72110d11-8e3d-47be-aa21-6ccaafc4108b`; read it with the `DesignSync` tool — note `list_projects` does NOT return it, since that lists only design-*system* projects). Terminal status strip → sticky mono nav → split hero (headline + `pipx install` + GitHub sign-in + magic-link) beside a **proof console** (tabbed `session.skolem` / `schema.ddl`, with a nonce'd JS "Run proof" that streams the real pipeline stages to a `DIVERGENT` badge) → "Anatomy of a proof" → counterexample tables → **coverage matrix** → API panel → CTA → footer. **Every capability claim on this page is checked against the engine and must stay that way** — the mockup advertised `DISTINCT`/`UNION`/`LIMIT`/`MIN`/`MAX` as supported (all raise `ValueError`), a `/v1/verify` endpoint with a `{verdict, solver, elapsed_ms, witness, diff}` response, `z3 4.13.0`, `bound 1–8`, a Homebrew tap, and a p50 latency figure; the port replaced all of them with what the code does. The third coverage column is **"rejected"**, not "planned" — fail-closed is the product, so it reads as a feature. Solver version and limits are injected by `root()` in `main.py` (`z3.get_version_string()`, `DEFAULT_BOUND`, `MAX_BOUND`, `FREE_TIER_MONTHLY_LIMIT`) rather than typed into the markup, so they cannot drift.
@@ -308,25 +349,12 @@ File exists but is empty. Intended to check whether a single query satisfies sch
 ### 2. `core/witness.py` — Witness/counterexample generation helpers
 File exists but is empty. Intended to clean up and format Z3 model output into human-readable counterexample databases. Currently handled inline in `equivalence.py`.
 
-### 3. The GitHub Action (memory: gtm-monetization-sequencing)
-`cli/` now ships both `verify` (an explicit pair) and `diff` (every query a
-branch changed, derived from git — see the `cli/` DONE section above). The
-`parse_ddl()` blocker that used to make `diff` unsound against a real Flyway
-`migrations/` directory (silently dropping every ALTER TABLE) is fixed —
-`core/ddl_parser.py` now folds ALTER TABLE and fails closed on anything
-outside the supported subset. What's left is the Action itself: a Docker
-action wrapping the CLI (`skolem diff --output github --fail-on …`), not a
-reimplementation. Design questions still open: how a PR's changed-file list
-maps to `GLOB` (a repo-configurable input, most likely), and whether the
-LLM `explain_result()` call should default off for this surface per the
-GTM roadmap note on trimming per-call cost for agent/CI traffic.
-
-### 4. Scaling (memory: scaling-architecture-roadmap)
+### 3. Scaling (memory: scaling-architecture-roadmap)
 Async job queue + competing consumers (Postgres `SKIP LOCKED`), result cache,
 shared-state rate-limiter/breaker, poison-job watchdog. Not started — see the
 scaling roadmap memory.
 
-### 5. Make the $49 Team tier real (blocks a truthful launch)
+### 4. Make the $49 Team tier real (blocks a truthful launch)
 
 **The problem.** Nothing in the code distinguishes Individual from Team — both
 are just members of `PAID_TIERS` in `api/verify.py`, so `_enforce_quota` treats
@@ -350,20 +378,18 @@ also cheap here, because it is mostly re-scoping tables that already exist.
 
 Ranked by value ÷ effort:
 
-| # | Change | Why it justifies $49 | Effort |
+| # | Change | Why it justifies $49 | Status |
 |---|---|---|---|
-| 1 | **Cap Individual at ~2,000 runs/month** | Restores the lever. ~66/day — no human reviewing rewrites by hand hits it; CI on a busy repo passes it in a week. Framing: *Individual is for your reviews, Team is for your pipeline.* One-line change in `_enforce_quota` | Trivial |
-| 2 | **Orgs + 5 seats** — Migration #5: `organizations`, `org_members` | Makes the arithmetic self-evident: 5 × $9 = $45 ≈ $49. Resolve plan by org membership in `_enforce_quota`; cache the org lookup the way `auth/middleware.py` already caches API keys | Medium — mirrors the existing `api_keys`/`projects` pattern |
-| 3 | **Org-scoped projects + shared run history** | The daily value: a platform team sees each other's proofs instead of each person keeping a private log. `projects.owner_id` → nullable `org_id`; same for `get_recent_runs` scoping | Small once #2 lands |
-| 4 | **The GitHub Action** (= task #3 above) | The purchase trigger, and the one thing an individual literally cannot do: enforce a verdict on someone else's PR. `skolem diff --output github --fail-on` already exists | Small — ~80% built |
-| 5 | **Server-side policy** — org owner sets `--fail-on`; a dev can't weaken it in their own PR | The sharpest team-only concept available. A `.skolem.yml` a developer can edit is not a gate; policy keyed to the org and enforced server-side is the product | Small after #2 + #4 |
-| 6 | **Org audit export** — who proved what, when, what verdict | Pure margin: every row is already in `verification_runs`. A query and a CSV endpoint | Trivial |
+| 1 | **Cap Individual at ~2,000 runs/month** | Restores the lever. ~66/day — no human reviewing rewrites by hand hits it; CI on a busy repo passes it in a week. Framing: *Individual is for your reviews, Team is for your pipeline.* One-line change in `_enforce_quota` | **Done** — `INDIVIDUAL_TIER_MONTHLY_LIMIT` in `api/verify.py`; only `team` (own or inherited) stays unlimited |
+| 2 | **Orgs + 5 seats** — Migration #5: `organizations`, `org_members` | Makes the arithmetic self-evident: 5 × $9 = $45 ≈ $49. Resolve plan by org membership in `_enforce_quota`; cache the org lookup the way `auth/middleware.py` already caches API keys | **Done** — see `db/repositories/organizations.py`, `api/organizations.py` |
+| 3 | **Org-scoped projects + shared run history** | The daily value: a platform team sees each other's proofs instead of each person keeping a private log. `projects.owner_id` → nullable `org_id`; same for `get_recent_runs` scoping | **Done** — Migration #6, `_can_access_run` in `api/verify.py` |
+| 4 | **The GitHub Action** | The purchase trigger, and the one thing an individual literally cannot do: enforce a verdict on someone else's PR | **Done** — `action/` (composite action wrapping `cli/`); see `action/README.md` |
+| 5 | **Server-side policy** — org owner sets `--fail-on`; a dev can't weaken it in their own PR | The sharpest team-only concept available. A `.skolem.yml` a developer can edit is not a gate; policy keyed to the org and enforced server-side is the product | **Done** — Migration #7 (`organizations.fail_on_policy`); `VerifyResponse.policy_fail_on` computed server-side in `_resolve_project_and_policy`; CLI unions it with the caller's own `--fail-on` in `_effective_fail_on` (can only widen, never narrow) |
+| 6 | **Org audit export** — who proved what, when, what verdict | Pure margin: every row is already in `verification_runs`. A query and a CSV endpoint | **Done** — `GET /api/organizations/{org_id}/audit.csv` (owner-only), `get_org_audit_rows()` |
 
-**Sequence:** #1 immediately (costs nothing, stops the bleeding) → #4 (nearly
-done, and it's what people actually buy) → #2/#3/#5 together as the "Team is
-real now" release → #6 when a prospect asks.
+**Sequence:** #1–#6 are all built. This tier is fully real now.
 
-**Later, with the async queue (task #4):** parallel solve slots are the other
+**Later, with the async queue (task #3 above):** parallel solve slots are the other
 economically honest lever. CI is bursty (a PR touching 10 query files is 10
 pairs at once) and solver time is the real cost. Individual serial, Team
 N-concurrent. Charging for compute actually spent is defensible in a way that
@@ -409,9 +435,11 @@ All suites are standalone (no pytest required, but pytest-compatible):
   `--seeds N --bound B`.
 - `tests/api_verify_text_test.py` — `/api/verify/text` end-to-end (timeout
   defaults/clamp, persistence, divergent explain) with Supabase/LLM stubbed.
-- `tests/cli_verify_test.py` — 24 tests for `skolem verify` with the transport
+- `tests/cli_verify_test.py` — 28 tests for `skolem verify` with the transport
   stubbed: the exit-code policy (0/1/2, `--fail-on`), client-side flag validation,
-  file/stdin reading, request payload + User-Agent, and the three renderers.
+  file/stdin reading, request payload + User-Agent, the three renderers, and the
+  server-side `policy_fail_on` union (`_effective_fail_on`: widens but never narrows
+  the caller's own `--fail-on`, degrades to local-only when the field is absent).
 - `tests/cli_diff_test.py` — 17 tests for `skolem diff` against real throwaway
   git repos (only the HTTP transport is stubbed): pair discovery for
   modified/added/deleted files, the undetected-rename warning, the DDL-changed
@@ -424,8 +452,12 @@ All suites are standalone (no pytest required, but pytest-compatible):
   `skm_` API key) + magic-link OTP call.
 - `tests/circuit_breaker_test.py` — the explainer circuit breaker (trips, short-
   circuits, half-open recovery).
-- `tests/billing_test.py` — free-tier quota gate, checkout redirect, portal,
-  webhook `payment_failed`.
+- `tests/billing_test.py` — free-tier quota gate (including the Individual
+  monthly cap and Team's true-unlimited bypass, own or org-inherited), checkout
+  redirect, portal, webhook `payment_failed`.
+- `tests/org_audit_test.py` — the org audit CSV export: owner-only access
+  (non-owner and unknown-org both 404), correct headers/rows, CSV-formula-
+  injection escaping, and an empty-org export still returning just the header.
 - `docs/encoding_audit.md` — rule-by-rule audit of the Z3 encoding vs the paper
   (Figs 8–12, Eqns 1–2).
 

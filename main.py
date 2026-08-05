@@ -49,16 +49,19 @@ from api.verify import (
     WEB_TIMEOUT_MS,
     WEB_MAX_TIMEOUT_MS,
     FREE_TIER_MONTHLY_LIMIT,
+    INDIVIDUAL_TIER_MONTHLY_LIMIT,
 )
 from api.auth import router as auth_router
 from api.keys import router as keys_router
 from api.projects import router as projects_router
+from api.organizations import router as organizations_router
 from api.billing import router as billing_router
 from api.webhooks import router as webhooks_router
 from api.stats import router as stats_router
 from auth.middleware import JWTMiddleware
 from db.repositories.api_keys import list_api_keys
 from db.repositories.projects import list_projects
+from db.repositories.organizations import list_organizations_for_user
 
 setup_logging()
 
@@ -271,6 +274,7 @@ app.include_router(verify_router)
 app.include_router(auth_router)
 app.include_router(keys_router)
 app.include_router(projects_router)
+app.include_router(organizations_router)
 app.include_router(billing_router)
 app.include_router(webhooks_router)
 app.include_router(stats_router)
@@ -479,6 +483,7 @@ async def pricing_page(request: Request):
             # z3_version feeds the shared marketing header's status strip.
             "z3_version": _Z3_VERSION,
             "free_tier_limit": FREE_TIER_MONTHLY_LIMIT,
+            "individual_tier_limit": INDIVIDUAL_TIER_MONTHLY_LIMIT,
             "default_bound": DEFAULT_BOUND,
             "max_bound": MAX_BOUND,
             "web_timeout_s": WEB_TIMEOUT_MS // 1000,
@@ -637,8 +642,23 @@ async def projects_page(request: Request):
     user_id = getattr(request.state, "user_id", None)
     user_email = getattr(request.state, "user_email", None)
     projects = await list_projects(user_id) if user_id else []
+    # Orgs populate the optional "share with org" selector on the create form.
+    orgs = await list_organizations_for_user(user_id) if user_id else []
     return templates.TemplateResponse(
         request=request,
         name="projects.html",
-        context={"user_email": user_email, "projects": projects},
+        context={"user_email": user_email, "projects": projects, "orgs": orgs},
+    )
+
+
+@app.get("/organizations")
+async def organizations_page(request: Request):
+    # Protected by JWTMiddleware (not a public path) — user_id is always set here.
+    user_id = getattr(request.state, "user_id", None)
+    user_email = getattr(request.state, "user_email", None)
+    orgs = await list_organizations_for_user(user_id) if user_id else []
+    return templates.TemplateResponse(
+        request=request,
+        name="organizations.html",
+        context={"user_email": user_email, "orgs": orgs},
     )

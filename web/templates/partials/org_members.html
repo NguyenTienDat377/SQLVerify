@@ -1,0 +1,38 @@
+{% if error %}
+<div class="sk-banner sk-banner--error">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="15" y1="9" x2="9" y2="15"></line>
+        <line x1="9" y1="9" x2="15" y2="15"></line>
+    </svg>
+    {{ error }}
+</div>
+{% endif %}
+
+<form class="sk-create-form sk-create-form--sm"
+      hx-post="/api/organizations/{{ org_id }}/members"
+      hx-target="#members-{{ org_id }}"
+      hx-swap="innerHTML">
+    <input type="email" name="email" placeholder="teammate@company.com"
+           required class="form-input">
+    <button type="submit" class="btn btn-primary btn-sm">Add member</button>
+</form>
+
+<ul class="sk-list">
+    {% for m in members %}
+    <li class="sk-list-row">
+        <div class="sk-list-content">
+            <span class="sk-list-name">{{ m.email }}</span>
+        </div>
+        <button class="btn btn-danger btn-sm"
+                hx-post="/api/organizations/{{ org_id }}/members/{{ m.user_id }}/remove"
+                hx-target="#members-{{ org_id }}"
+                hx-swap="innerHTML"
+                hx-confirm="Remove this member from the organization?">
+            Remove
+        </button>
+    </li>
+    {% else %}
+    <li class="sk-list-empty">No members yet — invite one above.</li>
+    {% endfor %}
+</ul>

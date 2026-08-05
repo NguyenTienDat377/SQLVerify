@@ -135,7 +135,7 @@ skolem/
 │   └── repositories/        # verification_runs, subscriptions, api_keys, projects
 │
 ├── mcp/                     # MCP surface — standalone stdio proxy (own .venv; only needs mcp+httpx)
-│   ├── skolem_mcp.py     # FastMCP server: tool verify_sql_equivalence() → POST /api/verify/text
+│   ├── skolem_mcp.py     # MCPServer stdio server: tool verify_sql_equivalence() → POST /api/verify/text
 │   └── examples/            # repair_loop.py — counterexample-driven self-healing agent loop
 │
 └── web/                     # Jinja2 + HTMX frontend

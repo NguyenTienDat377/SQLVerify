@@ -1,0 +1,120 @@
+name: 'Skolem SQL Verification'
+description: >-
+  Formally verify, via Z3, that SQL queries changed in this PR are equivalent
+  to the ones they replace. A thin wrapper over `skolem diff` — no
+  reimplementation, no Z3 in this action; every check is a call to a running
+  Skolem deployment's POST /api/verify/text.
+author: 'Skolem'
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  ddl:
+    description: >-
+      Path to the Flyway DDL schema: a file, a directory of .sql files
+      (concatenated in Flyway V<n>__ version order), or a glob.
+    required: true
+  glob:
+    description: >-
+      Glob(s) matching changed query files to verify. One per line if more
+      than one (e.g. "queries/*.sql").
+    required: true
+  base:
+    description: >-
+      Git ref to diff against, e.g. ${{ github.event.pull_request.base.sha }}.
+      Compared via merge-base, so commits landed on it after your branch
+      point are ignored.
+    required: true
+  fail-on:
+    description: 'Comma-separated statuses that fail the check.'
+    required: false
+    default: 'divergent'
+  dialect:
+    description: 'SQL dialect for parsing.'
+    required: false
+    default: 'generic'
+  bound:
+    description: 'Max rows per table Z3 explores, 1-6. Leave unset for the server default.'
+    required: false
+    default: ''
+  timeout-ms:
+    description: 'Solver timeout in milliseconds. Leave unset for the server default.'
+    required: false
+    default: ''
+  project:
+    description: 'Tag the run with a Skolem project id.'
+    required: false
+    default: ''
+  url:
+    description: 'Skolem base URL. Leave unset to use the CLI default (https://skolem.dev).'
+    required: false
+    default: ''
+  api-key:
+    description: 'Skolem API key (skm_...). Store as a repo/org secret — never inline.'
+    required: true
+  python-version:
+    description: 'Python version to run the CLI with.'
+    required: false
+    default: '3.12'
+
+outputs:
+  exit-code:
+    description: 'skolem diff exit code: 0 policy pass, 1 policy fail, 2 the CLI itself failed.'
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    # cli/ is httpx-only by design (see cli/README.md) — installing it never
+    # drags in Z3. ${{ github.action_path }} resolves to this action's own
+    # directory regardless of how the caller referenced it (local path or
+    # owner/repo/action@ref), so ../cli always finds this repo's CLI.
+    - name: Install skolem CLI
+      shell: bash
+      run: pip install --quiet "${{ github.action_path }}/../cli"
+
+    - name: Run skolem diff
+      id: run
+      shell: bash
+      env:
+        SKOLEM_API_KEY: ${{ inputs.api-key }}
+        SKOLEM_URL: ${{ inputs.url }}
+        IN_DDL: ${{ inputs.ddl }}
+        IN_GLOB: ${{ inputs.glob }}
+        IN_BASE: ${{ inputs.base }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_DIALECT: ${{ inputs.dialect }}
+        IN_BOUND: ${{ inputs.bound }}
+        IN_TIMEOUT_MS: ${{ inputs.timeout-ms }}
+        IN_PROJECT: ${{ inputs.project }}
+      # Every input is passed through an env var and read back with "$VAR",
+      # never templated straight into the script body — a value containing
+      # shell metacharacters (e.g. an org's fail-on list) can't reinterpret
+      # the script this way. See GitHub's own script-injection guidance.
+      run: |
+        set -euo pipefail
+
+        args=(diff --base "$IN_BASE" --ddl "$IN_DDL" --output github \
+              --fail-on "$IN_FAIL_ON" --dialect "$IN_DIALECT")
+        [ -n "$IN_BOUND" ] && args+=(--bound "$IN_BOUND")
+        [ -n "$IN_TIMEOUT_MS" ] && args+=(--timeout-ms "$IN_TIMEOUT_MS")
+        [ -n "$IN_PROJECT" ] && args+=(--project "$IN_PROJECT")
+
+        globs=()
+        while IFS= read -r g; do
+          [ -n "$g" ] && globs+=("$g")
+        done <<< "$IN_GLOB"
+
+        set +e
+        skolem "${args[@]}" "${globs[@]}"
+        code=$?
+        set -e
+
+        echo "exit-code=${code}" >> "$GITHUB_OUTPUT"
+        exit "$code"

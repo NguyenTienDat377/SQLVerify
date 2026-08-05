@@ -115,6 +115,36 @@ async def get_recent_runs(
         return []
 
 
+async def get_org_audit_rows(org_id: str, limit: int = 5000) -> list[dict]:
+    """
+    Every verification run tagged to a project scoped to this org — "who
+    proved what, when, what verdict" (CLAUDE.md Team-tier decision table,
+    item #6). Joins through projects.org_id, the same access-control chain
+    _can_access_run/get_project already use in api/verify.py, via PostgREST's
+    !inner embed hint (a plain embed would still return the parent row even
+    when the embedded filter excludes it — !inner makes the filter actually
+    restrict verification_runs). A run with no project_id was never
+    associated with any org and is correctly excluded from its audit trail.
+    """
+    try:
+        client = get_client()
+        response = (
+            client.table("verification_runs")
+            .select(
+                "id, created_at, status, divergence_reason, duration_ms, "
+                "user_id, project_id, projects!inner(name, org_id)"
+            )
+            .eq("projects.org_id", org_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+    except Exception as e:
+        logger.error("Failed to fetch audit rows for org {oid}: {err}", oid=org_id, err=e)
+        return []
+
+
 async def get_run_by_id(run_id: str) -> Optional[dict]:
     """
     Fetch a single verification run by UUID — full detail for result replay.

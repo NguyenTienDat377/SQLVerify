@@ -1,8 +1,13 @@
+{% set next_plan = "team" if tier == "individual" else "individual" %}
 <div class="upgrade-prompt glass-panel" style="padding: 1.5rem; text-align: center; border-left: 3px solid var(--accent, #5b8def);">
-    <h3 style="margin: 0 0 0.5rem;">You've hit the free tier</h3>
+    <h3 style="margin: 0 0 0.5rem;">
+        You've hit your {{ "Individual" if tier == "individual" else "free" }} tier limit
+    </h3>
     <p style="color: var(--text-secondary); margin: 0 0 1rem;">
         You've used your {{ limit }} verifications this month. Upgrade to keep verifying.
     </p>
-    <a href="/billing/checkout?plan=individual" class="btn btn-primary">Upgrade — Individual</a>
+    <a href="/billing/checkout?plan={{ next_plan }}" class="btn btn-primary">
+        Upgrade — {{ "Team" if next_plan == "team" else "Individual" }}
+    </a>
     <a href="/pricing" class="btn btn-secondary" style="margin-left: 0.5rem;">See plans</a>
 </div>

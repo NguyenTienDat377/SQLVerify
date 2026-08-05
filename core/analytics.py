@@ -225,6 +225,46 @@ def capture_project_deleted(*, user_id: Optional[str]) -> None:
         logger.warning("Analytics capture failed: {err}", err=exc)
 
 
+def capture_org_created(*, user_id: Optional[str]) -> None:
+    """Record an organization creation."""
+    if _client is None or not user_id:
+        return
+    try:
+        _client.capture(distinct_id=user_id, event="org_created")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Analytics capture failed: {err}", err=exc)
+
+
+def capture_org_member_added(*, user_id: Optional[str]) -> None:
+    """Record a member being added to an org."""
+    if _client is None or not user_id:
+        return
+    try:
+        _client.capture(distinct_id=user_id, event="org_member_added")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Analytics capture failed: {err}", err=exc)
+
+
+def capture_org_member_removed(*, user_id: Optional[str]) -> None:
+    """Record a member being removed from an org."""
+    if _client is None or not user_id:
+        return
+    try:
+        _client.capture(distinct_id=user_id, event="org_member_removed")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Analytics capture failed: {err}", err=exc)
+
+
+def capture_org_audit_exported(*, user_id: Optional[str]) -> None:
+    """Record an org audit CSV export."""
+    if _client is None or not user_id:
+        return
+    try:
+        _client.capture(distinct_id=user_id, event="org_audit_exported")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Analytics capture failed: {err}", err=exc)
+
+
 def capture_api_key_created(*, user_id: Optional[str]) -> None:
     """Record an API key creation."""
     if _client is None or not user_id:

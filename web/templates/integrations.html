@@ -16,9 +16,10 @@
 
 <!-- Public CI/CD + integrations page. Shell ported from CI.dc.html; its content
      was replaced wholesale because that mockup documented an unbuilt product.
-     Every command, flag and exit code below is checked against cli/. You can
-     gate a PR today with a plain workflow step running the CLI — the packaged
-     Action is what's missing, not the capability.
+     Every command, flag and exit code below is checked against cli/ and
+     action/ — the packaged GitHub Action (action/) is a composite action
+     that installs and calls the same CLI shown in the "bare cli" tab; it
+     adds convenience, not capability.
      See CLAUDE.md § integrations.html before editing. -->
 
 <div class="sk-page">
@@ -85,7 +86,7 @@
       </div>
 
       <div id="runner-github" class="sk-runner-panel" role="tabpanel">
-<pre class="sk-code"><span class="c"># .github/workflows/sql-proof.yml</span>
+<pre class="sk-code"><span class="c"># .github/workflows/sql-proof.yml — using the packaged action</span>
 <span class="k">name</span>: sql-proof
 <span class="k">on</span>: [pull_request]
 
@@ -96,17 +97,12 @@
       - <span class="k">uses</span>: actions/checkout@v4
         <span class="k">with</span>:
           <span class="k">fetch-depth</span>: 0   <span class="c"># diff needs the merge base</span>
-      - <span class="k">uses</span>: actions/setup-python@v5
+      - <span class="k">uses</span>: NguyenTienDat377/SQLVerify/action@main
         <span class="k">with</span>:
-          <span class="k">python-version</span>: <span class="s">'3.12'</span>
-      - <span class="k">run</span>: pipx install ./cli
-      - <span class="k">run</span>: |
-          skolem diff \
-            --base origin/${{ '{{' }} github.base_ref {{ '}}' }} \
-            --ddl migrations/ <span class="s">'queries/*.sql'</span> \
-            --output github
-        <span class="k">env</span>:
-          <span class="k">SKOLEM_API_KEY</span>: ${{ '{{' }} secrets.SKOLEM_API_KEY {{ '}}' }}</pre>
+          <span class="k">ddl</span>: migrations/
+          <span class="k">glob</span>: <span class="s">'queries/*.sql'</span>
+          <span class="k">base</span>: ${{ '{{' }} github.event.pull_request.base.sha {{ '}}' }}
+          <span class="k">api-key</span>: ${{ '{{' }} secrets.SKOLEM_API_KEY {{ '}}' }}</pre>
       </div>
 
       <div id="runner-gitlab" class="sk-runner-panel" hidden role="tabpanel">
@@ -152,8 +148,10 @@ skolem diff --base origin/main --ddl migrations/ <span class="s">'queries/*.sql'
       <code class="sk-inline-code">git merge-base --base HEAD</code>, so the same
       command gives the same answer locally on a dirty tree and in CI after
       checkout. That's why the checkout needs full history — with a shallow
-      clone there is no merge base to diff against. A packaged GitHub Action is
-      on the roadmap; until then this workflow step is the supported path.
+      clone there is no merge base to diff against. The packaged
+      <a href="https://github.com/NguyenTienDat377/SQLVerify/tree/main/action">GitHub Action</a>
+      is a composite action that installs and calls the same CLI — nothing it
+      does isn't also available as the plain workflow step above.
     </p>
   </section>
 

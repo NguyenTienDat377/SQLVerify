@@ -54,6 +54,7 @@ from db.repositories.verification_runs import (
 )
 from db.repositories.subscriptions import get_active_subscription_by_user
 from db.repositories.projects import get_project
+from db.repositories.organizations import get_org_owner_for_member, get_org_fail_on_policy
 
 
 templates = Jinja2Templates(directory="web/templates")
@@ -81,6 +82,13 @@ class VerifyResponse(BaseModel):
     # Human-readable LLM explanation, already generated for divergent results
     # (see verify_equivalence_text). Null when not applicable/unavailable.
     explanation: Optional[str] = None
+    # Comma-separated statuses the run's org requires as failing (Team-tier
+    # "server-side policy" — CLAUDE.md decision table item #5), or null if the
+    # run isn't tagged to an org-scoped project. This is computed server-side
+    # from the org's own row, never from anything the caller sent, so a CLI's
+    # local --fail-on can only add to it, never remove from it — see
+    # cli/skolem_cli.py's _effective_fail_on.
+    policy_fail_on: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +113,38 @@ MAX_TIMEOUT_MS = 120_000      # hard ceiling for caller-supplied CI/CD timeouts
 VERIFY_RATE_LIMIT = "30/minute"
 
 # Free-tier quota: verification runs per calendar month before an upgrade is
-# required. Any active paid subscription lifts the cap entirely.
+# required.
 FREE_TIER_MONTHLY_LIMIT = int(os.getenv("FREE_TIER_MONTHLY_LIMIT", "100"))
+
+# Individual is unlimited-in-practice-but-not-in-name: without a cap, no
+# amount of usage ever pushes a human reviewer to Team, since Team buys
+# multi-person enforcement, not more runs (see CLAUDE.md's Team-tier
+# decision table, item #1). ~66/day — no one reviewing rewrites by hand hits
+# this; a CI pipeline on a busy repo passes it in about a week, which is the
+# point: Individual is for your reviews, Team is for your pipeline. Only
+# `team` (own or inherited via an org) stays truly unlimited.
+INDIVIDUAL_TIER_MONTHLY_LIMIT = int(os.getenv("INDIVIDUAL_TIER_MONTHLY_LIMIT", "2000"))
 PAID_TIERS = {"individual", "team"}
+
+# Org-membership lookup with a small per-process TTL cache — same pattern as
+# the API-key cache in auth/middleware.py. A Team subscription is billed to
+# the org owner's user_id (via LS checkout custom data), so a member with no
+# subscription of their own needs this indirection to inherit `team`. Caching
+# means a newly added member can take up to the TTL to see unlimited runs —
+# an acceptable staleness window, same trade-off the API-key cache already
+# makes for revocation.
+_ORG_OWNER_TTL = 60.0
+_org_owner_cache: dict[str, tuple[Optional[str], float]] = {}
+
+
+async def _resolve_org_owner_cached(user_id: str) -> Optional[str]:
+    now = time.monotonic()
+    hit = _org_owner_cache.get(user_id)
+    if hit and hit[1] > now:
+        return hit[0]
+    owner_id = await get_org_owner_for_member(user_id)
+    _org_owner_cache[user_id] = (owner_id, now + _ORG_OWNER_TTL)
+    return owner_id
 
 
 async def _enforce_quota(request: Request):
@@ -121,14 +158,27 @@ async def _enforce_quota(request: Request):
 
     try:
         sub = await get_active_subscription_by_user(user_id)
-        if sub and sub.get("tier") in PAID_TIERS:
-            return None  # active paid plan → unlimited
+        tier = sub.get("tier") if sub else None
+        if tier != "team":
+            # Not a Team subscriber themselves (no subscription, or Individual)
+            # — check whether they inherit `team` through an org whose owner
+            # has an active Team plan. An Individual subscriber CAN still
+            # inherit team's unlimited this way; team membership overrides
+            # a lower tier, never the reverse.
+            org_owner_id = await _resolve_org_owner_cached(user_id)
+            if org_owner_id:
+                org_sub = await get_active_subscription_by_user(org_owner_id)
+                if org_sub and org_sub.get("tier") == "team":
+                    tier = "team"
+        if tier == "team":
+            return None  # active Team plan (own or inherited via org) → truly unlimited
+        limit = INDIVIDUAL_TIER_MONTHLY_LIMIT if tier == "individual" else FREE_TIER_MONTHLY_LIMIT
         used = await count_runs_this_month(user_id)
     except Exception as e:  # noqa: BLE001 — fail open
         logger.warning("Quota check failed (allowing through): {err}", err=e)
         return None
 
-    if used < FREE_TIER_MONTHLY_LIMIT:
+    if used < limit:
         return None
 
     surface = "web" if "hx-request" in request.headers else "ci"
@@ -138,7 +188,7 @@ async def _enforce_quota(request: Request):
         return templates.TemplateResponse(
             request=request,
             name="partials/upgrade_prompt.html",
-            context={"limit": FREE_TIER_MONTHLY_LIMIT},
+            context={"limit": limit, "tier": tier or "free"},
             status_code=402,
         )
     return JSONResponse(
@@ -146,10 +196,10 @@ async def _enforce_quota(request: Request):
         content={
             "error": "quota_exceeded",
             "detail": (
-                f"Free tier limit of {FREE_TIER_MONTHLY_LIMIT} verifications/month "
+                f"{(tier or 'free').capitalize()} tier limit of {limit} verifications/month "
                 "reached. Upgrade to continue."
             ),
-            "limit": FREE_TIER_MONTHLY_LIMIT,
+            "limit": limit,
         },
     )
 
@@ -179,6 +229,41 @@ async def _resolve_project_id(user_id: Optional[str], project_id: Optional[str])
     return project_id if owned else None
 
 
+async def _resolve_project_and_policy(
+    user_id: Optional[str], project_id: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Like _resolve_project_id, but also surfaces the org's server-side
+    fail-on policy when the project is org-scoped. Only /api/verify/text (the
+    CI surface) calls this — the web workspace doesn't produce CLI exit codes,
+    so there's nothing for a policy to gate there."""
+    if not project_id or not user_id:
+        return None, None
+    project = await get_project(user_id, project_id)
+    if not project:
+        return None, None
+    policy_fail_on = None
+    if project.get("org_id"):
+        policy_fail_on = await get_org_fail_on_policy(project["org_id"])
+    return project_id, policy_fail_on
+
+
+async def _can_access_run(user_id: Optional[str], row: Optional[dict]) -> bool:
+    """True if user_id created this run, or the run belongs to a project
+    shared via an org the user is a member of. Backs the ownership checks on
+    /api/explain/{run_id} and /api/history/{run_id} so "shared run history"
+    (CLAUDE.md roadmap #3) actually shows teammates' runs, not just your own."""
+    if not row or not user_id:
+        return False
+    if row.get("user_id") == user_id:
+        return True
+    project_id = row.get("project_id")
+    if not project_id:
+        return False
+    # get_project() already returns None if user_id has no access (owner or
+    # org member) to this project, so a non-None result is the access check.
+    return bool(await get_project(user_id, project_id))
+
+
 async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_name: str) -> str:
     """Read an uploaded file or text string, prioritizing text if present."""
     if text and text.strip():
@@ -202,7 +287,9 @@ async def _get_content(upload: Optional[UploadFile], text: Optional[str], field_
     raise HTTPException(status_code=400, detail=f"No valid input provided for '{field_name}'.")
 
 
-def _result_to_response(result: VerificationResult) -> VerifyResponse:
+def _result_to_response(
+    result: VerificationResult, policy_fail_on: Optional[str] = None
+) -> VerifyResponse:
     return VerifyResponse(
         status=result.status,
         divergence_reason=result.divergence_reason,
@@ -211,6 +298,7 @@ def _result_to_response(result: VerificationResult) -> VerifyResponse:
         query_v2_output=result.query_v2_output,
         error_message=result.error_message,
         explanation=result.explanation,
+        policy_fail_on=policy_fail_on,
     )
 
 
@@ -311,7 +399,7 @@ async def generate_explanation(run_id: str, request: Request):
 
     row = await get_run_by_id(run_id)
     requester_id = getattr(request.state, "user_id", None)
-    if not row or row.get("user_id") != requester_id:
+    if not await _can_access_run(requester_id, row):
         raise HTTPException(status_code=404)
     if row["status"] != "divergent":
         raise HTTPException(status_code=400, detail="Explanation only available for divergent results.")
@@ -393,7 +481,7 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
         result.explanation = await explain_result(result, body.sql_v1, body.sql_v2)
 
     user_id = getattr(request.state, "user_id", None)
-    proj_id = await _resolve_project_id(user_id, body.project_id)
+    proj_id, policy_fail_on = await _resolve_project_and_policy(user_id, body.project_id)
     await save_run(result, body.ddl_sql, body.sql_v1, body.sql_v2,
                    body.dialect, duration_ms, user_id=user_id, project_id=proj_id)
     capture_verification_run(
@@ -402,7 +490,7 @@ async def verify_equivalence_text(request: Request, body: VerifyTextRequest):
         project_id=proj_id,
     )
 
-    return _result_to_response(result)
+    return _result_to_response(result, policy_fail_on=policy_fail_on)
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +513,20 @@ async def history(request: Request):
     user_id = getattr(request.state, "user_id", None)
     # Optional project filter from the verify-page selector (empty = all runs).
     project_id = request.query_params.get("project_id") or None
-    runs = await get_recent_runs(limit=20, user_id=user_id, project_id=project_id)
+    scope_user_id = user_id
+
+    if project_id and user_id:
+        project = await get_project(user_id, project_id)
+        if not project:
+            # Tampered/foreign id — drop the filter rather than erroring, same
+            # fail-soft pattern as _resolve_project_id.
+            project_id = None
+        elif project.get("org_id"):
+            # Org-shared project: history is the team's, not just this user's —
+            # drop the user_id filter so every member's runs on it show up.
+            scope_user_id = None
+
+    runs = await get_recent_runs(limit=20, user_id=scope_user_id, project_id=project_id)
     if "hx-request" in request.headers:
         return templates.TemplateResponse(
             request=request,
@@ -439,7 +540,7 @@ async def history_detail(run_id: str, request: Request):
     from db.repositories.verification_runs import get_run_by_id
     row = await get_run_by_id(run_id)
     requester_id = getattr(request.state, "user_id", None)
-    if not row or row.get("user_id") != requester_id:
+    if not await _can_access_run(requester_id, row):
         raise HTTPException(status_code=404)
 
     # Reconstruct a VerificationResult from the stored row

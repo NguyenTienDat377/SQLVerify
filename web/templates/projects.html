@@ -24,6 +24,14 @@
                required maxlength="100" class="form-input">
         <input type="text" name="description" placeholder="Description (optional)"
                maxlength="500" class="form-input">
+        {% if orgs %}
+        <select name="org_id" class="form-input">
+            <option value="">Personal (just me)</option>
+            {% for org in orgs %}
+            <option value="{{ org.id }}">Share with: {{ org.name }}</option>
+            {% endfor %}
+        </select>
+        {% endif %}
         <button type="submit" class="btn btn-primary">Create project</button>
     </form>
 

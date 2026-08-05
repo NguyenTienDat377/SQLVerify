@@ -17,6 +17,7 @@ from db.repositories.projects import (
     delete_project,
     list_projects,
 )
+from db.repositories.organizations import list_org_ids_for_user
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 templates = Jinja2Templates(directory="web/templates")
@@ -42,9 +43,16 @@ async def create_user_project(
     request: Request,
     name: str = Form(...),
     description: str = Form(""),
+    org_id: str = Form(""),
 ):
     user_id = request.state.user_id
-    created = await create_project(user_id, name, description)
+    # Drop a tampered/foreign org_id rather than erroring — same pattern as
+    # _resolve_project_id in api/verify.py: a bad value degrades to "no org"
+    # instead of failing the whole create.
+    clean_org_id = org_id.strip() or None
+    if clean_org_id and clean_org_id not in await list_org_ids_for_user(user_id):
+        clean_org_id = None
+    created = await create_project(user_id, name, description, org_id=clean_org_id)
     error = None
     if created is None:
         # Most likely an empty/duplicate name (UNIQUE owner_id, name).

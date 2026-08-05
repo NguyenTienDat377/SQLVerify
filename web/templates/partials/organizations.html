@@ -1,0 +1,62 @@
+{% if error %}
+<div class="sk-banner sk-banner--error">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="15" y1="9" x2="9" y2="15"></line>
+        <line x1="9" y1="9" x2="15" y2="15"></line>
+    </svg>
+    {{ error }}
+</div>
+{% endif %}
+
+<ul class="sk-list">
+    {% for org in orgs %}
+    <li class="sk-list-row sk-list-row--stacked">
+        <div class="sk-list-content">
+            <span class="sk-list-name">{{ org.name }}</span>
+            <span class="sk-badge {% if org.role == 'owner' %}sk-badge--info{% else %}sk-badge--muted{% endif %}">{{ org.role }}</span>
+            <span class="sk-list-meta">up to {{ org.seat_limit }} seats</span>
+            <span class="sk-list-meta">fail-on policy: <code class="sk-list-code">{{ org.fail_on_policy }}</code></span>
+        </div>
+        {% if org.role == 'owner' %}
+        <details class="sk-org-members">
+            <summary class="btn btn-secondary btn-sm">Manage members</summary>
+            <div id="members-{{ org.id }}"
+                 hx-get="/api/organizations/{{ org.id }}/members"
+                 hx-trigger="toggle once from:closest details"
+                 hx-swap="innerHTML">
+                <p class="sk-list-meta">Loading…</p>
+            </div>
+        </details>
+        <details class="sk-org-members">
+            <summary class="btn btn-secondary btn-sm">Edit fail-on policy</summary>
+            <form class="sk-create-form sk-create-form--sm"
+                  hx-post="/api/organizations/{{ org.id }}/policy"
+                  hx-target="#organizations-panel"
+                  hx-swap="innerHTML">
+                <input type="text" name="fail_on" value="{{ org.fail_on_policy }}"
+                       placeholder="divergent,unknown,error" required class="form-input">
+                <button type="submit" class="btn btn-primary btn-sm">Save policy</button>
+            </form>
+            <p class="sk-list-meta">
+                Comma-separated: divergent, unknown, error, ddl-changed. Every
+                project in this org enforces at least these statuses — a
+                member's own <code class="sk-inline-code">--fail-on</code> can
+                only add more, never fewer.
+            </p>
+        </details>
+        <a href="/api/organizations/{{ org.id }}/audit.csv" class="btn btn-secondary btn-sm">
+            Export audit CSV
+        </a>
+        {% endif %}
+    </li>
+    {% else %}
+    <li class="sk-list-empty">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+        </svg>
+        No organizations yet — create one above.
+    </li>
+    {% endfor %}
+</ul>

@@ -326,6 +326,16 @@ h1, h2, h3, h4 {
   min-width: 160px;
 }
 
+.sk-create-form--sm {
+  margin: 0.5rem 0;
+}
+
+.sk-create-form--sm .form-input {
+  min-width: 140px;
+  font-size: 0.8125rem;
+  padding: 0.4rem 0.6rem;
+}
+
 /* ── List rows ── */
 
 .sk-list {
@@ -359,6 +369,25 @@ h1, h2, h3, h4 {
 
 .sk-list-row--dimmed:hover {
   opacity: 0.75;
+}
+
+.sk-list-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.sk-org-members {
+  margin-top: 0.5rem;
+}
+
+.sk-org-members summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+}
+
+.sk-org-members summary::-webkit-details-marker {
+  display: none;
 }
 
 .sk-list-content {
@@ -477,6 +506,12 @@ h1, h2, h3, h4 {
   background: rgba(161, 161, 170, 0.1);
   color: var(--text-secondary);
   border: 1px solid rgba(161, 161, 170, 0.15);
+}
+
+.sk-badge--info {
+  background: rgba(96, 165, 250, 0.1);
+  color: var(--accent-blue-300);
+  border: 1px solid rgba(96, 165, 250, 0.2);
 }
 
 /* ── Small buttons ── */
