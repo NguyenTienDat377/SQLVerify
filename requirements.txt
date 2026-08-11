@@ -1,7 +1,7 @@
 PyJWT[crypto]>=2.13.0          # CVE floor — PYSEC-2026-175..179 (JWT auth path)
 loguru>=0.7.3
 fastapi>=0.141.1               # pulls patched starlette
-starlette>=1.3.1               # CVE floor — CVE-2026-48817/48818/54282/54283
+starlette>=1.5.0               # CVE floor — CVE-2026-48817/48818/54282/54283
 cryptography>=49.0.0           # CVE floor — GHSA-537c-gmf6-5ccf (backs PyJWT verify)
 uvicorn[standard]>=0.52.0
 cryptography>=50.0.0           # CVE floor — GHSA-537c-gmf6-5ccf (backs PyJWT verify)
@@ -10,7 +10,7 @@ pydantic-settings>=2.14.2      # CVE floor — GHSA-4xgf-cpjx-pc3j
 jinja2>=3.1.6
 python-multipart>=0.0.32       # CVE floor — CVE-2026-53538/53539/53540 (file upload)
 z3-solver>=5.0.0.0
-anthropic>=0.120.2
+anthropic>=0.121.0
 supabase>=2.31.0
 sqlalchemy>=2.0.51
 python-dotenv>=1.2.2
@@ -24,6 +24,8 @@ pytest-asyncio>=1.4.0
 # Always run tests/paper_cases_test.py + tests/smoke_test.py before merging one.
 sqlglot>=30.15.0
 markdown>=3.10.2
+sqlglot>=30.14.0
+markdown>=3.10.3
 nh3>=0.3.6
 slowapi>=0.1.10
 sentry-sdk[fastapi]>=2.66.1
