@@ -22,7 +22,7 @@ pytest-asyncio>=1.4.0
 # changes landed across 30.13+30.14 alone), and the encoder reads that AST
 # directly — so a bump here is a correctness change, not a housekeeping one.
 # Always run tests/paper_cases_test.py + tests/smoke_test.py before merging one.
-sqlglot>=30.14.0
+sqlglot>=30.15.0
 markdown>=3.10.2
 nh3>=0.3.6
 slowapi>=0.1.10
