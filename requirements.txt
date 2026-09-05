@@ -28,5 +28,7 @@ sqlglot>=30.14.0
 markdown>=3.10.3
 nh3>=0.3.6
 slowapi>=0.1.10
+sentry-sdk[fastapi]>=2.68.1
+posthog>=7.42.0
 sentry-sdk[fastapi]>=2.68.0
 posthog>=7.44.2
